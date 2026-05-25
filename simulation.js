@@ -65,6 +65,11 @@ export class Simulation {
     this.isNight       = false;
     this.cycleStart    = performance.now();
 
+    // Curseur joueur
+    this.mouseX        = -9999;
+    this.mouseY        = -9999;
+    this.CURSOR_RADIUS = 120;     // px — rayon de fuite
+
     // Entités
     this.entities = ENTITY_DEFS.map(def =>
       new Entity(def, canvas.width, canvas.height));
@@ -82,10 +87,10 @@ export class Simulation {
     // Constantes physique
     this.INTERACTION_RADIUS   = 180;  // px — zone d'influence
     this.CONFLICT_RADIUS      = 60;   // px — zone de conflit
-    this.FRICTION             = 0.92; // amortissement vélocité
-    this.MAX_SPEED            = 4.5;
-    this.NOISE_SCALE          = 0.003;
-    this.NOISE_SPEED          = 0.0005;
+    this.FRICTION             = 0.90; // amortissement vélocité (réduit = plus d'amplitude)
+    this.MAX_SPEED            = 7.0;  // augmenté pour plus d'amplitude
+    this.NOISE_SCALE          = 0.0025; // échelle spatiale du bruit (réduite = variations plus larges)
+    this.NOISE_SPEED          = 0.0008; // vitesse temporelle du bruit (augmentée = changements plus fréquents)
     this._noiseTime           = 0;
   }
 
@@ -154,9 +159,27 @@ export class Simulation {
         e._noiseOffsetY + e.y * this.NOISE_SCALE,
         this._noiseTime + 100
       );
-      const noiseForce = 0.04 * (0.3 + e.character.curiosite * 0.7);
+      const noiseForce = 0.08 * (0.4 + e.character.curiosite * 0.6); // force bruit augmentée
+
       e.vx += nx * noiseForce;
       e.vy += ny * noiseForce;
+
+      // --- Fuite du curseur joueur ---
+      const cdx  = e.x - this.mouseX;
+      const cdy  = e.y - this.mouseY;
+      const cdist = Math.sqrt(cdx * cdx + cdy * cdy) || 1;
+      if (cdist < this.CURSOR_RADIUS) {
+        // Force de fuite inversement proportionnelle à la distance
+        const flee = (1 - cdist / this.CURSOR_RADIUS) * 0.35;
+        e.vx += (cdx / cdist) * flee;
+        e.vy += (cdy / cdist) * flee;
+        // Légère panique : humeur baisse, état FUITE
+        e.mood = Math.max(-1, e.mood - 0.001 * dt);
+        if (e.state !== STATE.PROJET) {
+          e.state = STATE.FUITE;
+          e._stateTimer = 0;
+        }
+      }
 
       // --- Attraction vers les projets actifs ---
       for (const proj of this.projects) {

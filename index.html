@@ -79,6 +79,16 @@
     const sim = new Simulation(canvas, infoPanel);
     sim.start();
 
+    // ── Tracking curseur ───────────────────────────────────────────
+    canvas.addEventListener('mousemove', (e) => {
+      sim.mouseX = e.clientX;
+      sim.mouseY = e.clientY;
+    });
+    canvas.addEventListener('mouseleave', () => {
+      sim.mouseX = -9999;
+      sim.mouseY = -9999;
+    });
+
     // ── Resize ─────────────────────────────────────────────────────
     window.addEventListener('resize', () => {
       resizeCanvas();

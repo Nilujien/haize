@@ -3,7 +3,7 @@
  * Boucle principale, physique, interactions, rendu Canvas.
  */
 
-import { Entity, ENTITY_DEFS, AFFINITES, STATE } from './entities.js';
+import { Entity, ENTITY_DEFS, AFFINITES, STATE, Project } from './entities.js';
 
 // ─── Bruit de Perlin simplifié (2D, implémentation légère) ────────────────────
 // Source : adapté du domaine public (Ken Perlin)
@@ -69,6 +69,12 @@ export class Simulation {
     this.entities = ENTITY_DEFS.map(def =>
       new Entity(def, canvas.width, canvas.height));
 
+    // Projets actifs
+    this.projects        = [];
+    this._nextProjectIn  = 8000 + Math.random() * 7000; // premier projet dans 8-15s
+    this._projectTimer   = 0;
+    this.PROJECT_MAX     = 3;   // max simultanés à l'écran
+
     // Frame loop
     this._lastTime   = performance.now();
     this._rafId      = null;
@@ -93,6 +99,9 @@ export class Simulation {
   reset() {
     this.entities = ENTITY_DEFS.map(def =>
       new Entity(def, this.canvas.width, this.canvas.height));
+    this.projects       = [];
+    this._projectTimer  = 0;
+    this._nextProjectIn = 8000 + Math.random() * 7000;
     this.cycleStart = performance.now();
     this.isNight    = false;
   }
@@ -132,6 +141,9 @@ export class Simulation {
 
     this._noiseTime += dt * this.NOISE_SPEED;
 
+    // ── Projets : spawn & update ───────────────────────────────────────────
+    this._updateProjects(dt);
+
     for (const e of entities) {
       // --- Bruit de Perlin (déplacement organique) ---
       const nx = PERLIN.noise(
@@ -145,6 +157,32 @@ export class Simulation {
       const noiseForce = 0.04 * (0.3 + e.character.curiosite * 0.7);
       e.vx += nx * noiseForce;
       e.vy += ny * noiseForce;
+
+      // --- Attraction vers les projets actifs ---
+      for (const proj of this.projects) {
+        if (proj.resolved || proj.isExpired) continue;
+        const pdx  = proj.x - e.x;
+        const pdy  = proj.y - e.y;
+        const pdist = Math.sqrt(pdx * pdx + pdy * pdy) || 1;
+
+        if (pdist < proj.radius * 2.5) {
+          // Force d'attraction proportionnelle au caractère affinitaire
+          const charAffinity = e.character[proj.affinity] || 0.5;
+          const pull = charAffinity * 0.03 * (1 - pdist / (proj.radius * 2.5));
+          e.vx += (pdx / pdist) * pull * dt * 0.1;
+          e.vy += (pdy / pdist) * pull * dt * 0.1;
+
+          // Dans le rayon de contribution : avancer la progression
+          if (pdist < proj.radius) {
+            proj.participants.add(e.id);
+            e.state = STATE.PROJET;
+            e._stateTimer = 0;
+            // Contribution : basée sur le caractère affinitaire + energy
+            const contrib = charAffinity * (e.energy / 100) * 0.012 * dt;
+            proj.progress += contrib;
+          }
+        }
+      }
 
       // --- Interactions avec les autres entités ---
       for (const other of entities) {
@@ -240,6 +278,50 @@ export class Simulation {
     }
   }
 
+  // ── Gestion des projets ───────────────────────────────────────────────────
+  _updateProjects(dt) {
+    const W = this.canvas.width, H = this.canvas.height;
+
+    // Spawn de nouveaux projets
+    this._projectTimer += dt;
+    if (this._projectTimer >= this._nextProjectIn &&
+        this.projects.filter(p => !p.resolved && !p.isExpired).length < this.PROJECT_MAX) {
+      this.projects.push(new Project(W, H));
+      this._projectTimer   = 0;
+      this._nextProjectIn  = 12000 + Math.random() * 10000; // prochain dans 12-22s
+    }
+
+    // Mise à jour des projets
+    for (const proj of this.projects) {
+      if (proj.resolved || proj.isExpired) continue;
+
+      // Vérifier résolution
+      if (proj.progress >= proj.difficulty) {
+        proj.resolved   = true;
+        proj.resolvedAt = performance.now();
+
+        // Récompenser les participants
+        for (const e of this.entities) {
+          if (proj.participants.has(e.id)) {
+            e.mood   = Math.min(1, e.mood + proj.moodReward);
+            e.energy = Math.min(100, e.energy + proj.energyReward);
+            if (e.state === STATE.PROJET) {
+              e.state = STATE.SOCIAL;
+              e._stateTimer = 0;
+            }
+          }
+        }
+      }
+    }
+
+    // Nettoyer les projets résolus (après 3s d'animation) ou expirés
+    this.projects = this.projects.filter(p => {
+      if (p.isExpired) return false;
+      if (p.resolved && (performance.now() - p.resolvedAt) > 3000) return false;
+      return true;
+    });
+  }
+
   // ── Transitions d'état ────────────────────────────────────────────────────
   _updateState(e, dt) {
     e._stateTimer += dt;
@@ -248,6 +330,15 @@ export class Simulation {
     if (e._stateTimer < minTime) return;
 
     let newState = e.state;
+
+    // Une entité en PROJET reste en PROJET tant qu'elle est dans le rayon d'un projet actif
+    if (e.state === STATE.PROJET) {
+      const nearProject = this.projects.some(p =>
+        !p.resolved && !p.isExpired &&
+        Math.hypot(p.x - e.x, p.y - e.y) < p.radius
+      );
+      if (nearProject) return; // rester en PROJET
+    }
 
     if (e.energy < 20) {
       newState = STATE.REPOS;
@@ -304,6 +395,11 @@ export class Simulation {
           ctx.stroke();
         }
       }
+    }
+
+    // ── Projets ─────────────────────────────────────────────────────────────
+    for (const proj of this.projects) {
+      this._renderProject(ctx, proj);
     }
 
     // ── Entités ─────────────────────────────────────────────────────────────
@@ -375,11 +471,101 @@ export class Simulation {
       [STATE.SOCIAL]:  '#2ecc71',
       [STATE.FUITE]:   '#e74c3c',
       [STATE.ERRANCE]: '#9b59b6',
+      [STATE.PROJET]:  '#00cec9',
     };
     ctx.beginPath();
     ctx.arc(e.x + r * 0.65, e.y - r * 0.65, 4, 0, Math.PI * 2);
     ctx.fillStyle = stateColors[e.state] || '#ffffff';
     ctx.fill();
+  }
+
+  // ── Rendu d'un projet ────────────────────────────────────────────────────
+  _renderProject(ctx, proj) {
+    const now   = performance.now();
+    const phase = proj._phase + now * 0.002;
+    const pulse = 1 + Math.sin(phase) * 0.12;
+
+    if (proj.resolved) {
+      // Animation de résolution : expansion + fondu
+      const age   = now - proj.resolvedAt;
+      const t     = age / 3000;          // 0→1 sur 3s
+      const alpha = Math.max(0, 1 - t);
+      const boom  = proj.radius * (1 + t * 2);
+      ctx.beginPath();
+      ctx.arc(proj.x, proj.y, boom, 0, Math.PI * 2);
+      ctx.strokeStyle = proj.color + Math.round(alpha * 255).toString(16).padStart(2,'0');
+      ctx.lineWidth   = 3 * alpha;
+      ctx.stroke();
+
+      ctx.fillStyle = proj.color + Math.round(alpha * 80).toString(16).padStart(2,'0');
+      ctx.fill();
+
+      ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(2)})`;
+      ctx.font      = '18px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✓', proj.x, proj.y);
+      return;
+    }
+
+    if (proj.isExpired) return;
+
+    const r = proj.radius * 0.45 * pulse;
+
+    // Halo d'attraction (zone d'attraction visuelle)
+    const gradient = ctx.createRadialGradient(proj.x, proj.y, r * 0.5, proj.x, proj.y, proj.radius * 1.5);
+    gradient.addColorStop(0,   proj.color + '22');
+    gradient.addColorStop(0.5, proj.color + '11');
+    gradient.addColorStop(1,   'transparent');
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, proj.radius * 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Cercle principal
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, r, 0, Math.PI * 2);
+    ctx.fillStyle   = proj.color + '33';
+    ctx.fill();
+    ctx.strokeStyle = proj.color + 'cc';
+    ctx.lineWidth   = 2;
+    ctx.stroke();
+
+    // Arc de progression
+    if (proj.progress > 0) {
+      const startAngle = -Math.PI / 2;
+      const endAngle   = startAngle + proj.progressPct * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(proj.x, proj.y, r + 8, startAngle, endAngle);
+      ctx.strokeStyle = proj.color;
+      ctx.lineWidth   = 4;
+      ctx.lineCap     = 'round';
+      ctx.stroke();
+    }
+
+    // Temps restant (barre qui rétrécit si personne ne contribue)
+    const lifeLeft = 1 - (now - proj.spawnedAt) / proj.maxLifetime;
+    if (lifeLeft < 0.4 && proj.participants.size === 0) {
+      ctx.beginPath();
+      ctx.arc(proj.x, proj.y, r + 14, -Math.PI / 2, -Math.PI / 2 + lifeLeft * Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,100,100,0.5)`;
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+    }
+
+    // Label du projet
+    ctx.fillStyle    = proj.color;
+    ctx.font         = 'bold 11px monospace';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(proj.label, proj.x, proj.y - r - 14);
+
+    // Compteur participants
+    if (proj.participants.size > 0) {
+      ctx.fillStyle    = 'rgba(255,255,255,0.7)';
+      ctx.font         = '10px monospace';
+      ctx.fillText(`${proj.participants.size} contrib.`, proj.x, proj.y + r + 14);
+    }
   }
 
   // ── Panel info ────────────────────────────────────────────────────────────

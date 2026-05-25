@@ -10,7 +10,94 @@ export const STATE = {
   SOCIAL:   'SOCIAL',
   FUITE:    'FUITE',
   ERRANCE:  'ERRANCE',
+  PROJET:   'PROJET',   // engagé sur un projet
 };
+
+// ─── Types de projets ─────────────────────────────────────────────────────────
+// Chaque type a un nom, une couleur, une difficulté, et des affinités de caractère
+// (les entités dont le caractère correspond contribuent plus vite)
+export const PROJECT_TYPES = [
+  {
+    type: 'EXPLORATION',
+    label: '🔭 Exploration',
+    color: '#00cec9',
+    difficulty: 60,          // points à accumuler pour résoudre
+    radius: 70,              // rayon d'attraction
+    affinity: 'curiosite',   // caractère qui booste la contribution
+    moodReward: 0.35,        // bonus humeur à la résolution
+    energyReward: 25,        // bonus énergie à la résolution
+  },
+  {
+    type: 'CONFLIT',
+    label: '⚔️ Conflit',
+    color: '#d63031',
+    difficulty: 80,
+    radius: 80,
+    affinity: 'agression',
+    moodReward: 0.20,
+    energyReward: 15,
+  },
+  {
+    type: 'CELEBRATION',
+    label: '🎉 Célébration',
+    color: '#fdcb6e',
+    difficulty: 50,
+    radius: 90,
+    affinity: 'socialite',
+    moodReward: 0.50,
+    energyReward: 30,
+  },
+  {
+    type: 'CONSTRUCTION',
+    label: '🏗️ Construction',
+    color: '#6c5ce7',
+    difficulty: 100,
+    radius: 75,
+    affinity: 'extraversion',
+    moodReward: 0.40,
+    energyReward: 20,
+  },
+  {
+    type: 'MEDITATION',
+    label: '🧘 Méditation',
+    color: '#a29bfe',
+    difficulty: 40,
+    radius: 60,
+    affinity: 'curiosite',
+    moodReward: 0.30,
+    energyReward: 35,
+  },
+];
+
+// ─── Classe Project ────────────────────────────────────────────────────────────
+export class Project {
+  constructor(canvasW, canvasH) {
+    // Choisir un type aléatoire
+    const def = PROJECT_TYPES[Math.floor(Math.random() * PROJECT_TYPES.length)];
+    Object.assign(this, def);
+
+    // Position aléatoire (marges pour rester visible)
+    const margin = 100;
+    this.x = margin + Math.random() * (canvasW - margin * 2);
+    this.y = margin + Math.random() * (canvasH - margin * 2);
+
+    // Progression
+    this.progress    = 0;           // 0 → difficulty = résolu
+    this.resolved    = false;
+    this.resolvedAt  = null;        // timestamp pour animation de fin
+    this.participants = new Set();  // ids des entités contribuant
+
+    // Animation de pulsation
+    this._phase      = Math.random() * Math.PI * 2;
+
+    // Durée de vie max (si personne ne vient) : 45s
+    this.spawnedAt   = performance.now();
+    this.maxLifetime = 45000;
+  }
+
+  get progressPct() { return Math.min(1, this.progress / this.difficulty); }
+  get isExpired()   { return !this.resolved && (performance.now() - this.spawnedAt) > this.maxLifetime; }
+}
 
 // ─── Affinités prédéfinies (paires qui s'attirent fortement) ──────────────────
 // Format : ['ID1', 'ID2', force] — force ∈ [0,1]

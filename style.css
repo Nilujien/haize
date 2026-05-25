@@ -87,6 +87,7 @@ canvas {
 .state-social   { background: rgba(46,204,113,0.25);  color: #2ecc71; }
 .state-fuite    { background: rgba(231,76,60,0.25);   color: #e74c3c; }
 .state-errance  { background: rgba(155,89,182,0.25);  color: #c39bd3; }
+.state-projet   { background: rgba(0,206,201,0.25);   color: #00cec9; }
 
 .entity-stat { font-size: 9px; color: #888; }
 .mood-pos    { color: #2ecc71 !important; }

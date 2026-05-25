@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HAIZE — Simulation de Vie</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Canvas principal -->
+  <canvas id="main-canvas"></canvas>
+
+  <!-- ── Panel info ─────────────────────────────────────────────────── -->
+  <div id="info-panel">
+    <div class="cycle-indicator">☀️ Chargement…</div>
+  </div>
+
+  <!-- ── Titre ─────────────────────────────────────────────────────── -->
+  <div id="title">HAIZE</div>
+
+  <!-- ── Légende ───────────────────────────────────────────────────── -->
+  <div id="legend">
+    <h3>Entités</h3>
+    <!-- généré par JS -->
+  </div>
+
+  <!-- ── Contrôles ─────────────────────────────────────────────────── -->
+  <div id="controls">
+    <button class="ctrl-btn" id="btn-pause">⏸ Pause</button>
+    <span class="ctrl-label">Vitesse</span>
+    <input type="range" id="speed-slider" min="0.2" max="4" step="0.1" value="1" />
+    <span id="speed-val" class="ctrl-label">×1.0</span>
+    <button class="ctrl-btn" id="btn-reset">↺ Reset</button>
+  </div>
+
+  <script type="module">
+    import { ENTITY_DEFS, AFFINITES } from './entities.js';
+    import { Simulation } from './simulation.js';
+
+    // ── Canvas setup ─────────────────────────────────────────────────
+    const canvas    = document.getElementById('main-canvas');
+    const infoPanel = document.getElementById('info-panel');
+    const legend    = document.getElementById('legend');
+
+    function resizeCanvas() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+
+    // ── Légende ────────────────────────────────────────────────────
+    let legendHtml = '<h3>Entités</h3>';
+    for (const def of ENTITY_DEFS) {
+      legendHtml += `
+        <div class="legend-row">
+          <span class="legend-dot" style="background:${def.color}"></span>
+          <span class="legend-name">${def.id}</span>
+          <span class="legend-desc">${def.label}</span>
+        </div>`;
+    }
+    legendHtml += `<h3 style="margin-top:10px">Affinités ✨</h3>`;
+    for (const [a, b, f] of AFFINITES) {
+      const defA = ENTITY_DEFS.find(d => d.id === a);
+      const defB = ENTITY_DEFS.find(d => d.id === b);
+      legendHtml += `
+        <div class="legend-row">
+          <span class="legend-dot" style="background:${defA.color}"></span>
+          <span class="legend-name" style="color:${defA.color}">${a}</span>
+          <span class="legend-desc">↔</span>
+          <span class="legend-dot" style="background:${defB.color}"></span>
+          <span class="legend-name" style="color:${defB.color}">${b}</span>
+          <span class="legend-desc">(${Math.round(f*100)}%)</span>
+        </div>`;
+    }
+    legend.innerHTML = legendHtml;
+
+    // ── Simulation ─────────────────────────────────────────────────
+    const sim = new Simulation(canvas, infoPanel);
+    sim.start();
+
+    // ── Resize ─────────────────────────────────────────────────────
+    window.addEventListener('resize', () => {
+      resizeCanvas();
+      sim.resize();
+    });
+
+    // ── Contrôles ──────────────────────────────────────────────────
+    const btnPause   = document.getElementById('btn-pause');
+    const speedSlider = document.getElementById('speed-slider');
+    const speedVal   = document.getElementById('speed-val');
+    const btnReset   = document.getElementById('btn-reset');
+
+    btnPause.addEventListener('click', () => {
+      sim.paused = !sim.paused;
+      btnPause.textContent = sim.paused ? '▶ Play' : '⏸ Pause';
+    });
+
+    speedSlider.addEventListener('input', () => {
+      const v = parseFloat(speedSlider.value);
+      sim.speedFactor = v;
+      speedVal.textContent = `×${v.toFixed(1)}`;
+    });
+
+    btnReset.addEventListener('click', () => {
+      sim.reset();
+    });
+  </script>
+</body>
+</html>

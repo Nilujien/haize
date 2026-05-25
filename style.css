@@ -1,0 +1,209 @@
+/* style.css — HAIZE Simulation */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0f1117;
+  color: #e0e0e0;
+  font-family: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* ── Overlay principal ─────────────────────────────────────────── */
+#ui-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ── Panel info (droite) ──────────────────────────────────────── */
+#info-panel {
+  position: fixed;
+  top: 16px; right: 16px;
+  width: 240px;
+  background: rgba(10,12,20,0.82);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  padding: 12px 14px;
+  pointer-events: auto;
+  backdrop-filter: blur(6px);
+  font-size: 11px;
+  line-height: 1.6;
+  z-index: 20;
+}
+
+.cycle-indicator {
+  font-size: 12px;
+  font-weight: bold;
+  color: #a0c4ff;
+  margin-bottom: 10px;
+  letter-spacing: 0.05em;
+}
+
+.entity-list { display: flex; flex-direction: column; gap: 4px; }
+
+.entity-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+}
+
+.entity-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.entity-id {
+  font-weight: bold;
+  width: 34px;
+  color: #fff;
+  font-size: 10px;
+}
+
+.entity-state {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  width: 56px;
+  text-align: center;
+}
+
+.state-actif    { background: rgba(241,196,15,0.25);  color: #f1c40f; }
+.state-repos    { background: rgba(149,165,166,0.20); color: #bdc3c7; }
+.state-social   { background: rgba(46,204,113,0.25);  color: #2ecc71; }
+.state-fuite    { background: rgba(231,76,60,0.25);   color: #e74c3c; }
+.state-errance  { background: rgba(155,89,182,0.25);  color: #c39bd3; }
+
+.entity-stat { font-size: 9px; color: #888; }
+.mood-pos    { color: #2ecc71 !important; }
+.mood-neg    { color: #e74c3c !important; }
+.mood-neu    { color: #888; }
+
+/* ── Contrôles (bas centre) ───────────────────────────────────── */
+#controls {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(10,12,20,0.82);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 40px;
+  padding: 10px 22px;
+  pointer-events: auto;
+  backdrop-filter: blur(6px);
+  z-index: 20;
+}
+
+.ctrl-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #ddd;
+  border-radius: 6px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+.ctrl-btn:hover { background: rgba(255,255,255,0.14); }
+
+.ctrl-label {
+  font-size: 11px;
+  color: #888;
+  user-select: none;
+}
+
+#speed-slider {
+  -webkit-appearance: none;
+  width: 90px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.15);
+  outline: none;
+  cursor: pointer;
+}
+#speed-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #3498db;
+  cursor: pointer;
+}
+
+/* ── Légende (bas gauche) ─────────────────────────────────────── */
+#legend {
+  position: fixed;
+  bottom: 20px; left: 16px;
+  width: 220px;
+  background: rgba(10,12,20,0.80);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  padding: 10px 14px;
+  pointer-events: auto;
+  backdrop-filter: blur(6px);
+  font-size: 10px;
+  z-index: 20;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+#legend h3 {
+  font-size: 11px;
+  color: #a0c4ff;
+  margin-bottom: 8px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.legend-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 5px;
+  line-height: 1.4;
+}
+
+.legend-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.legend-name  { font-weight: bold; color: #fff; min-width: 28px; }
+.legend-desc  { color: #888; font-size: 9px; }
+
+/* ── Titre ────────────────────────────────────────────────────── */
+#title {
+  position: fixed;
+  top: 16px; left: 20px;
+  font-size: 20px;
+  font-weight: bold;
+  letter-spacing: 0.12em;
+  color: rgba(255,255,255,0.18);
+  pointer-events: none;
+  z-index: 20;
+  text-transform: uppercase;
+}
+
+/* ── Scrollbar legend ─────────────────────────────────────────── */
+#legend::-webkit-scrollbar { width: 4px; }
+#legend::-webkit-scrollbar-track { background: transparent; }
+#legend::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }

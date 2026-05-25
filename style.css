@@ -208,3 +208,19 @@ canvas {
 #legend::-webkit-scrollbar { width: 4px; }
 #legend::-webkit-scrollbar-track { background: transparent; }
 #legend::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+/* ── Tag événement global dans le panel ─────────────────────────*/
+.event-tag {
+  font-size: 10px;
+  font-family: monospace;
+  border: 1px solid;
+  border-radius: 4px;
+  padding: 3px 8px;
+  margin: 4px 8px;
+  text-align: center;
+  animation: pulse-tag 1.5s infinite alternate;
+}
+@keyframes pulse-tag {
+  from { opacity: 0.7; }
+  to   { opacity: 1; }
+}

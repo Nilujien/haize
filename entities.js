@@ -14,18 +14,16 @@ export const STATE = {
 };
 
 // ─── Types de projets ─────────────────────────────────────────────────────────
-// Chaque type a un nom, une couleur, une difficulté, et des affinités de caractère
-// (les entités dont le caractère correspond contribuent plus vite)
 export const PROJECT_TYPES = [
   {
     type: 'EXPLORATION',
     label: '🔭 Exploration',
     color: '#00cec9',
-    difficulty: 60,          // points à accumuler pour résoudre
-    radius: 70,              // rayon d'attraction
-    affinity: 'curiosite',   // caractère qui booste la contribution
-    moodReward: 0.35,        // bonus humeur à la résolution
-    energyReward: 25,        // bonus énergie à la résolution
+    difficulty: 60,
+    radius: 70,
+    affinity: 'curiosite',
+    moodReward: 0.35,
+    energyReward: 25,
   },
   {
     type: 'CONFLIT',
@@ -72,25 +70,20 @@ export const PROJECT_TYPES = [
 // ─── Classe Project ────────────────────────────────────────────────────────────
 export class Project {
   constructor(canvasW, canvasH) {
-    // Choisir un type aléatoire
     const def = PROJECT_TYPES[Math.floor(Math.random() * PROJECT_TYPES.length)];
     Object.assign(this, def);
 
-    // Position aléatoire (marges pour rester visible)
     const margin = 100;
     this.x = margin + Math.random() * (canvasW - margin * 2);
     this.y = margin + Math.random() * (canvasH - margin * 2);
 
-    // Progression
-    this.progress    = 0;           // 0 → difficulty = résolu
+    this.progress    = 0;
     this.resolved    = false;
-    this.resolvedAt  = null;        // timestamp pour animation de fin
-    this.participants = new Set();  // ids des entités contribuant
+    this.resolvedAt  = null;
+    this.participants = new Set();
 
-    // Animation de pulsation
     this._phase      = Math.random() * Math.PI * 2;
 
-    // Durée de vie max (si personne ne vient) : 45s
     this.spawnedAt   = performance.now();
     this.maxLifetime = 45000;
   }
@@ -99,65 +92,55 @@ export class Project {
   get isExpired()   { return !this.resolved && (performance.now() - this.spawnedAt) > this.maxLifetime; }
 }
 
-// ─── Affinités prédéfinies (paires qui s'attirent fortement) ──────────────────
-// Format : ['ID1', 'ID2', force] — force ∈ [0,1]
+// ─── Affinités prédéfinies ─────────────────────────────────────────────────────
 export const AFFINITES = [
-  ['ER',  'SB',  0.85],   // ER & SB — complicité ancienne
-  ['JG',  'AM',  0.80],   // JG & AM — curiosité partagée
-  ['LD',  'CM',  0.75],   // LD & CM — pacifisme commun
-  ['FT',  'TR',  0.90],   // FT & TR — duo énergique
-  ['GD',  'IM',  0.70],   // GD & IM — prudence & introspection
-  ['LPL', 'JC',  0.65],   // LPL & JC — sociabilité douce
+  ['ER',  'SB',  0.85],
+  ['JG',  'AM',  0.80],
+  ['LD',  'CM',  0.75],
+  ['FT',  'TR',  0.90],
+  ['GD',  'IM',  0.70],
+  ['LPL', 'JC',  0.65],
 ];
 
 // ─── Classe Entity ─────────────────────────────────────────────────────────────
 export class Entity {
-  /**
-   * @param {object} def  — définition issue de ENTITY_DEFS
-   * @param {number} canvasW
-   * @param {number} canvasH
-   */
   constructor(def, canvasW, canvasH) {
-    // Identité
     this.id       = def.id;
     this.color    = def.color;
     this.radius   = 22;
 
-    // Caractère (valeurs 0-1)
     this.character = { ...def.character };
 
-    // Position initiale aléatoire avec marges
     const margin = 60;
     this.x  = margin + Math.random() * (canvasW - margin * 2);
     this.y  = margin + Math.random() * (canvasH - margin * 2);
 
-    // Vélocité initiale
     const speed = 0.5 + this.character.extraversion * 1.5;
     const angle = Math.random() * Math.PI * 2;
     this.vx = Math.cos(angle) * speed;
     this.vy = Math.sin(angle) * speed;
 
-    // Stats
     this.energy = 60 + Math.random() * 40;
     this.social = 30 + Math.random() * 70;
-    this.mood   = (Math.random() * 2 - 1) * 0.3;  // ∈ [-1, 1]
+    this.mood   = (Math.random() * 2 - 1) * 0.3;
 
-    // État courant
     this.state = STATE.ERRANCE;
 
-    // Trail — positions récentes
     this.trail = [];
     this.trailMaxLen = 18;
 
-    // Timer interne pour transitions d'état
     this._stateTimer = 0;
 
-    // Bruit de Perlin — offset unique par entité
     this._noiseOffsetX = Math.random() * 1000;
     this._noiseOffsetY = Math.random() * 1000;
+
+    // Mémoire des interactions : accumule le temps passé près de chaque autre entité
+    this.interactionLog = {};
+
+    // Mémoire des succès : nombre de projets résolus avec participation de cette entité
+    this.successCount = 0;
   }
 
-  // ── Accès aux affinités ─────────────────────────────────────────────────────
   getAffinityWith(otherId) {
     for (const [a, b, force] of AFFINITES) {
       if ((a === this.id && b === otherId) ||
@@ -165,14 +148,17 @@ export class Entity {
     }
     return 0;
   }
+
+  // Retourne les top N entités les plus fréquemment côtoyées
+  getTopContacts(n = 3) {
+    return Object.entries(this.interactionLog)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n)
+      .map(([id, score]) => ({ id, score }));
+  }
 }
 
 // ─── Définitions des 12 entités ───────────────────────────────────────────────
-// character fields (all 0-1) :
-//   extraversion  : 0 = introverti,  1 = extraverti
-//   agression     : 0 = pacifique,   1 = agressif
-//   curiosite     : 0 = prudent,     1 = curieux
-//   socialite     : 0 = solitaire,   1 = sociable
 export const ENTITY_DEFS = [
   {
     id: 'ER', color: '#e74c3c',

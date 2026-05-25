@@ -89,6 +89,12 @@
       sim.mouseY = -9999;
     });
 
+    // ── Click-to-inspect ────────────────────────────────────────
+    canvas.addEventListener('click', (e) => {
+      sim.handleClick(e.clientX, e.clientY);
+    });
+    canvas.style.cursor = 'crosshair';
+
     // ── Resize ─────────────────────────────────────────────────────
     window.addEventListener('resize', () => {
       resizeCanvas();

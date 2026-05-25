@@ -155,6 +155,11 @@ export class Simulation {
     // ── Entité sélectionnée (click-to-inspect)
     this.selectedEntity  = null;
 
+    // ── Historique d'événements flottant (event log)
+    // Chaque entrée : { text, color, timestamp }
+    this.eventLog        = [];
+    this.EVENT_LOG_MAX   = 5;   // max lignes affichées simultanément
+
     // ── Événement global actif
     this.activeEvent     = null;
     this._eventTimer     = 0;
@@ -190,6 +195,7 @@ export class Simulation {
     this._eventTimer     = 0;
     this._nextEventIn    = 20000 + Math.random() * 20000;
     this.selectedEntity  = null;
+    this.eventLog        = [];
   }
 
   // ── Clic sur le canvas ─────────────────────────────────────────────────────
@@ -442,15 +448,31 @@ export class Simulation {
         proj.resolved   = true;
         proj.resolvedAt = performance.now();
 
+        // Construire la liste des participants pour le log
+        const participantIds = [...proj.participants].join(', ');
+
         for (const e of this.entities) {
           if (proj.participants.has(e.id)) {
             e.mood   = Math.min(1, e.mood + proj.moodReward);
             e.energy = Math.min(100, e.energy + proj.energyReward);
+            // ── Incrémenter le compteur de succès de l'entité ──
+            e.successCount = (e.successCount || 0) + 1;
             if (e.state === STATE.PROJET) {
               e.state = STATE.SOCIAL;
               e._stateTimer = 0;
             }
           }
+        }
+
+        // ── Ajouter une entrée dans l'event log ──
+        const entry = {
+          text:      `${proj.label} résolu ! (${participantIds || '—'})`,
+          color:     proj.color,
+          timestamp: performance.now(),
+        };
+        this.eventLog.unshift(entry);
+        if (this.eventLog.length > this.EVENT_LOG_MAX) {
+          this.eventLog.length = this.EVENT_LOG_MAX;
         }
       }
     }
@@ -566,6 +588,16 @@ export class Simulation {
     // Panneau inspect
     if (this.selectedEntity) {
       this._renderInspectPanel(ctx, W, H);
+    }
+
+    // ── Indicateur de zone de fuite curseur ──
+    if (this.mouseX > 0 && this.mouseX < W && this.mouseY > 0 && this.mouseY < H) {
+      this._renderCursorZone(ctx);
+    }
+
+    // ── Event log flottant (bas-centre, juste au-dessus des contrôles) ──
+    if (this.eventLog.length > 0) {
+      this._renderEventLog(ctx, W, H);
     }
   }
 
@@ -817,8 +849,126 @@ export class Simulation {
     ctx.fillStyle = stateColors[e.state] || '#ffffff';
     ctx.fill();
 
+    // ── Badge de succès (★N) — affiché si au moins 1 succès ──
+    if (e.successCount > 0) {
+      const badgeX = e.x - r * 0.55;
+      const badgeY = e.y - r - 10;
+      ctx.font      = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // Ombre légère pour lisibilité
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillText(`★${e.successCount}`, badgeX + 1, badgeY + 1);
+      ctx.fillStyle = '#f9ca24';
+      ctx.fillText(`★${e.successCount}`, badgeX, badgeY);
+    }
+
     // Curseur pointer (hint de cliquabilité)
     // Géré côté HTML via cursor CSS — rien à faire ici
+  }
+
+  // ── Indicateur visuel de la zone de fuite curseur ────────────────────────
+  _renderCursorZone(ctx) {
+    const x = this.mouseX, y = this.mouseY;
+    const r = this.CURSOR_RADIUS;
+    const now = performance.now();
+
+    // Cercle pointillé animé (rotation lente)
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(now * 0.0005);
+
+    // Cercle extérieur pointillé
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(231,76,60,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 8]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Halo gradient doux
+    const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    grad.addColorStop(0,   'rgba(231,76,60,0.08)');
+    grad.addColorStop(0.6, 'rgba(231,76,60,0.03)');
+    grad.addColorStop(1,   'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Petit point central
+    ctx.beginPath();
+    ctx.arc(0, 0, 3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(231,76,60,0.5)';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ── Event log flottant des dernières résolutions ──────────────────────────
+  _renderEventLog(ctx, W, H) {
+    const now = performance.now();
+    const LOG_LIFETIME = 12000; // ms — durée de vie d'une entrée
+    const LINE_H = 22;
+    const PAD_X = 16, PAD_Y = 8;
+    const PANEL_W = 360;
+
+    // Filtrer les entrées encore vivantes
+    const alive = this.eventLog.filter(e => (now - e.timestamp) < LOG_LIFETIME);
+    if (alive.length === 0) return;
+
+    const PANEL_H = alive.length * LINE_H + PAD_Y * 2;
+    // Position : bas-centre, au-dessus des contrôles (env. 80px du bas)
+    const px = (W - PANEL_W) / 2;
+    const py = H - 80 - PANEL_H;
+
+    ctx.save();
+
+    // Fond semi-transparent
+    ctx.fillStyle = 'rgba(5,8,20,0.72)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(px, py, PANEL_W, PANEL_H, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // Titre
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('ÉVÉNEMENTS RÉCENTS', px + PAD_X, py + 4);
+
+    // Lignes
+    for (let i = 0; i < alive.length; i++) {
+      const entry = alive[i];
+      const age   = now - entry.timestamp;
+      const alpha = Math.max(0.2, 1 - age / LOG_LIFETIME);
+      const lineY = py + PAD_Y + i * LINE_H + 4;
+
+      // Pastille colorée
+      ctx.beginPath();
+      ctx.arc(px + PAD_X + 5, lineY + 7, 4, 0, Math.PI * 2);
+      ctx.fillStyle = entry.color + Math.round(alpha * 255).toString(16).padStart(2,'0');
+      ctx.fill();
+
+      // Texte
+      ctx.fillStyle = `rgba(255,255,255,${(alpha * 0.85).toFixed(2)})`;
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(entry.text, px + PAD_X + 14, lineY + 7);
+
+      // Âge (s)
+      ctx.fillStyle = `rgba(255,255,255,${(alpha * 0.35).toFixed(2)})`;
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${Math.round(age / 1000)}s`, px + PANEL_W - 8, lineY + 7);
+    }
+
+    ctx.restore();
   }
 
   _renderProject(ctx, proj) {
@@ -929,6 +1079,7 @@ export class Simulation {
           <span class="entity-state state-${e.state.toLowerCase()}">${e.state}</span>
           <span class="entity-stat">⚡${energyPct}</span>
           <span class="entity-stat ${moodClass}">😊${moodBar}%</span>
+          ${e.successCount > 0 ? `<span class="entity-stat" style="color:#f9ca24">★${e.successCount}</span>` : ''}
         </div>`;
     }
 

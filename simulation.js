@@ -1227,314 +1227,266 @@ export class Simulation {
     ctx.restore();
   }
 
-  // ── Panneau Inspect (click-to-inspect) ───────────────────────────────────
+  // ── Panneau Inspect (click-to-inspect) — position fixe haut-gauche ────────
   _renderInspectPanel(ctx, W, H) {
     const e = this.selectedEntity;
-    const PW = 230, PH = 340;
-    const PAD = 12;
-    const MARGIN = 14;
 
-    // Zones UI à éviter (px, py, pw, ph)
-    // Légende : bas-gauche ~240×(50vh) depuis bottom:20 left:16
-    // Info panel : haut-droite ~256×(variable) depuis top:16 right:16
-    // Console : bas-centre ~460×220 depuis bottom:76
-    // Contrôles : bas-centre depuis bottom:20, hauteur ~56
-    const forbidden = [
-      { x: 16,        y: H - 20 - 400, w: 244, h: 400  }, // légende bas-gauche (large marge)
-      { x: W - 272,   y: 16,           w: 256, h: 380  }, // info panel haut-droite
-      { x: (W-480)/2, y: H - 76 - 220, w: 480, h: 300  }, // console + contrôles
-    ];
-
-    // Candidats de placement : 4 quadrants autour de l'entité
-    const offset = 24; // distance entre l'entité et le bord du panneau
-    const candidates = [
-      // droite de l'entité
-      { px: e.x + e.radius + offset,           py: e.y - PH / 2 },
-      // gauche de l'entité
-      { px: e.x - e.radius - offset - PW,      py: e.y - PH / 2 },
-      // au-dessus
-      { px: e.x - PW / 2,                      py: e.y - e.radius - offset - PH },
-      // en-dessous
-      { px: e.x - PW / 2,                      py: e.y + e.radius + offset },
-    ];
-
-    // Clamp chaque candidat dans le viewport
-    for (const c of candidates) {
-      c.px = Math.max(MARGIN, Math.min(W - PW - MARGIN, c.px));
-      c.py = Math.max(MARGIN, Math.min(H - PH - MARGIN, c.py));
-    }
-
-    // Scorer chaque candidat : pénalité par overlap avec zones interdites
-    function overlapArea(ax, ay, aw, ah, bx, by, bw, bh) {
-      const ox = Math.max(0, Math.min(ax + aw, bx + bw) - Math.max(ax, bx));
-      const oy = Math.max(0, Math.min(ay + ah, by + bh) - Math.max(ay, by));
-      return ox * oy;
-    }
-
-    let bestPx = candidates[0].px, bestPy = candidates[0].py;
-    let bestScore = Infinity;
-
-    for (const c of candidates) {
-      let penalty = 0;
-      for (const f of forbidden) {
-        penalty += overlapArea(c.px, c.py, PW, PH, f.x, f.y, f.w, f.h);
-      }
-      // Bonus si le panneau est proche de l'entité (distance centre panneau ↔ entité)
-      const cx = c.px + PW / 2, cy = c.py + PH / 2;
-      const dist = Math.hypot(cx - e.x, cy - e.y);
-      const score = penalty + dist * 0.1;
-      if (score < bestScore) {
-        bestScore = score;
-        bestPx = c.px;
-        bestPy = c.py;
-      }
-    }
-
-    const px = bestPx, py = bestPy;
-
-    ctx.save();
-
-    // Fond + bordure
-    ctx.fillStyle = 'rgba(8,10,22,0.95)';
-    ctx.strokeStyle = e.color;
-    ctx.lineWidth = 1.5;
-    ctx.shadowColor = e.color + '44';
-    ctx.shadowBlur = 12;
-    ctx.beginPath();
-    ctx.roundRect(px, py, PW, PH, 10);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.stroke();
-
-    // Barre colorée gauche
-    ctx.fillStyle = e.color;
-    ctx.beginPath();
-    ctx.roundRect(px + 1.5, py + 10, 3, PH - 20, 2);
-    ctx.fill();
-
-    ctx.textBaseline = 'top';
-
-    // Nom + état
-    ctx.font = 'bold 20px monospace';
-    ctx.fillStyle = e.color;
-    ctx.fillText(e.id, px + PAD + 8, py + PAD);
+    // ── Constantes de layout ────────────────────────────────────────────────
+    const PW   = 220;           // largeur panneau
+    const PX   = 16;            // x fixe (bord gauche)
+    const PY   = 50;            // y fixe : sous le titre HAIZE
+    const PAD  = 14;            // padding interne uniforme
+    const INNER_W = PW - PAD * 2; // largeur utilisable
+    const LINE_H  = 16;         // hauteur d'une ligne standard
+    const SEP_H   = 10;         // espace autour d'un séparateur
+    const BAR_H   = 5;          // hauteur barre de progression
+    const SECTION_GAP = 6;      // espace entre titre de section et son contenu
 
     const stateColors = {
       ACTIF: '#f1c40f', REPOS: '#95a5a6', SOCIAL: '#2ecc71',
-      FUITE: '#e74c3c', ERRANCE: '#9b59b6', PROJET: '#00cec9',
-      SATURE: '#ff7675',
+      FUITE: '#e74c3c', ERRANCE: '#9b59b6', PROJET: '#00cec9', SATURE: '#ff7675',
     };
-    ctx.font = '11px monospace';
+
+    // ── Pré-calculer la hauteur totale ──────────────────────────────────────
+    const contacts = e.getTopContacts(3);
+    const hasSparkline = e.moodHistory.length > 4;
+    const SPARKLINE_H = 38; // label(10) + gap(4) + graphe(24)
+
+    const PH =
+      PAD                                     // top pad
+      + 22                                    // nom (font 18)
+      + 6                                     // gap nom→état
+      + 12                                    // état (font 11)
+      + SEP_H * 2                             // séparateur
+      + (LINE_H * 3)                          // 3 barres stats (humeur, énergie, charge)
+      + SEP_H * 2                             // séparateur
+      + 11                                    // titre CARACTÈRE
+      + SECTION_GAP
+      + LINE_H * 2                            // 2 lignes de traits (2 cols × 2 lignes)
+      + SEP_H * 2                             // séparateur
+      + 11                                    // titre CONTACTS
+      + SECTION_GAP
+      + Math.max(1, contacts.length) * LINE_H // lignes contacts (min 1 pour "aucun")
+      + (hasSparkline ? SEP_H * 2 + SPARKLINE_H : 0)
+      + PAD;                                  // bottom pad
+
+    const px = PX, py = PY;
+
+    ctx.save();
+    ctx.textBaseline = 'top';
+    ctx.textAlign    = 'left';
+
+    // ── Fond ────────────────────────────────────────────────────────────────
+    ctx.fillStyle   = 'rgba(8,10,20,0.72)';
+    ctx.strokeStyle = e.color + 'aa';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.roundRect(px, py, PW, PH, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // Trait coloré gauche
+    ctx.fillStyle = e.color;
+    ctx.beginPath();
+    ctx.roundRect(px + 1, py + 10, 3, PH - 20, 2);
+    ctx.fill();
+
+    // ── Curseur de layout ───────────────────────────────────────────────────
+    let cy = py + PAD;
+    const X = px + PAD;
+
+    // Nom
+    ctx.font      = 'bold 18px monospace';
+    ctx.fillStyle = e.color;
+    ctx.fillText(e.id, X, cy);
+    cy += 22 + 6;
+
+    // État
+    ctx.font      = '11px monospace';
     ctx.fillStyle = stateColors[e.state] || '#aaa';
-    ctx.fillText(e.state, px + PAD + 8, py + PAD + 24);
+    ctx.fillText(e.state, X, cy);
+    cy += 12;
 
-    // Ligne de séparation
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(px + PAD, py + 52);
-    ctx.lineTo(px + PW - PAD, py + 52);
-    ctx.stroke();
-
-    // Barres de stats
-    let rowY = py + 60;
-    const BAR_X = px + PAD + 8;
-    const BAR_W = PW - PAD * 2 - 16;
-    const BAR_H = 6;
-    const LBL_W = 74;
-
-    const drawStat = (label, value, color) => {
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      ctx.font = '9px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(label, BAR_X, rowY);
-      this._drawBar(ctx, BAR_X + LBL_W, rowY, BAR_W - LBL_W, BAR_H, value, color);
-
-      // Valeur numérique à droite
-      ctx.fillStyle = 'rgba(255,255,255,0.3)';
-      ctx.font = '9px monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(Math.round(value * 100) + '%', px + PW - PAD - 2, rowY);
-      ctx.textAlign = 'left';
-      rowY += 15;
+    // ── Séparateur ──────────────────────────────────────────────────────────
+    const drawSep = () => {
+      cy += SEP_H / 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(px + PAD, cy);
+      ctx.lineTo(px + PW - PAD, cy);
+      ctx.stroke();
+      cy += SEP_H / 2;
     };
 
-    drawStat('HUMEUR',     (e.mood + 1) / 2, e.mood > 0 ? '#2ecc71' : '#e74c3c');
-    drawStat('ÉNERGIE',    e.energy / 100,   '#f1c40f');
-    const chargeColor = e.socialCharge > e.socialSaturationThreshold ? '#ff7675' : '#74b9ff';
-    drawStat('CHARGE SOC', e.socialCharge / 100, chargeColor);
-
-    // Ligne de séparation
-    rowY += 2;
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(px + PAD, rowY);
-    ctx.lineTo(px + PW - PAD, rowY);
-    ctx.stroke();
-    rowY += 8;
-
-    // Caractère
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = 'bold 9px monospace';
-    ctx.fillText('CARACTÈRE', BAR_X, rowY);
-    rowY += 13;
-
-    const TRAIT_BAR_W = (BAR_W - 6) / 2;
-    const traits = [
-      ['Extraversion', e.character.extraversion],
-      ['Agression',    e.character.agression],
-      ['Curiosité',    e.character.curiosite],
-      ['Sociabilité',  e.character.socialite],
-    ];
-    for (let i = 0; i < traits.length; i += 2) {
-      const [lA, vA] = traits[i];
+    // ── Barre stat ──────────────────────────────────────────────────────────
+    const LBL_W = 72;
+    const drawStatBar = (label, value, color) => {
+      ctx.font      = '9px monospace';
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
-      ctx.font = '9px monospace';
-      ctx.fillText(lA, BAR_X, rowY);
-      this._drawBar(ctx, BAR_X + 58, rowY, TRAIT_BAR_W - 58, 5, vA, e.color + 'cc');
+      ctx.textAlign = 'left';
+      ctx.fillText(label, X, cy + 1);
 
-      if (traits[i + 1]) {
-        const [lB, vB] = traits[i + 1];
-        const col2X = BAR_X + TRAIT_BAR_W + 6;
-        ctx.fillText(lB, col2X, rowY);
-        this._drawBar(ctx, col2X + 58, rowY, TRAIT_BAR_W - 58, 5, vB, e.color + 'cc');
-      }
-      rowY += 14;
+      const bx = X + LBL_W;
+      const bw = INNER_W - LBL_W - 28;
+      this._drawBar(ctx, bx, cy + 1, bw, BAR_H, value, color);
+
+      ctx.font      = '9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      ctx.textAlign = 'right';
+      ctx.fillText(Math.round(value * 100) + '%', px + PW - PAD, cy + 1);
+      ctx.textAlign = 'left';
+      cy += LINE_H;
+    };
+
+    drawSep();
+    drawStatBar('HUMEUR',     (e.mood + 1) / 2,       e.mood > 0 ? '#2ecc71' : '#e74c3c');
+    drawStatBar('ÉNERGIE',    e.energy / 100,          '#f1c40f');
+    const chargeColor = e.socialCharge > e.socialSaturationThreshold ? '#ff7675' : '#74b9ff';
+    drawStatBar('CHARGE SOC', e.socialCharge / 100,    chargeColor);
+
+    // ── Caractère ───────────────────────────────────────────────────────────
+    drawSep();
+    ctx.font      = 'bold 9px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillText('CARACTÈRE', X, cy);
+    cy += 11 + SECTION_GAP;
+
+    const traits = [
+      ['Extr.',  e.character.extraversion],
+      ['Agr.',   e.character.agression],
+      ['Cur.',   e.character.curiosite],
+      ['Soc.',   e.character.socialite],
+    ];
+    const colW = (INNER_W - 8) / 2;
+    const TLBL = 28; // largeur du label de trait
+
+    for (let i = 0; i < 4; i += 2) {
+      const [lA, vA] = traits[i];
+      const [lB, vB] = traits[i + 1];
+
+      ctx.font      = '9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.38)';
+
+      // Colonne A
+      ctx.fillText(lA, X, cy + 1);
+      this._drawBar(ctx, X + TLBL, cy + 1, colW - TLBL, BAR_H, vA, e.color + 'bb');
+
+      // Colonne B
+      const bx2 = X + colW + 8;
+      ctx.fillText(lB, bx2, cy + 1);
+      this._drawBar(ctx, bx2 + TLBL, cy + 1, colW - TLBL, BAR_H, vB, e.color + 'bb');
+
+      cy += LINE_H;
     }
 
-    // Ligne de séparation
-    rowY += 2;
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(px + PAD, rowY);
-    ctx.lineTo(px + PW - PAD, rowY);
-    ctx.stroke();
-    rowY += 8;
+    // ── Contacts fréquents ──────────────────────────────────────────────────
+    drawSep();
+    ctx.font      = 'bold 9px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillText('CONTACTS FRÉQUENTS', X, cy);
+    cy += 11 + SECTION_GAP;
 
-    // Contacts fréquents
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = 'bold 9px monospace';
-    ctx.fillText('CONTACTS FRÉQUENTS', BAR_X, rowY);
-    rowY += 13;
-
-    const contacts = e.getTopContacts(3);
     if (contacts.length === 0) {
-      ctx.fillStyle = 'rgba(255,255,255,0.25)';
-      ctx.font = '10px monospace';
-      ctx.fillText('Aucun encore…', BAR_X, rowY);
-      rowY += 14;
+      ctx.font      = '9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.fillText('Aucun encore…', X, cy + 1);
+      cy += LINE_H;
     } else {
       for (const { id, score } of contacts) {
         const other = this.entities.find(x => x.id === id);
-        const col = other ? other.color : '#fff';
+        const col   = other ? other.color : '#fff';
 
-        // Dot coloré
+        // Dot
         ctx.beginPath();
-        ctx.arc(BAR_X + 4, rowY + 5, 4, 0, Math.PI * 2);
+        ctx.arc(X + 4, cy + 6, 3.5, 0, Math.PI * 2);
         ctx.fillStyle = col;
         ctx.fill();
 
+        // Nom
+        ctx.font      = 'bold 10px monospace';
         ctx.fillStyle = col;
-        ctx.font = 'bold 10px monospace';
-        ctx.fillText(id, BAR_X + 14, rowY);
+        ctx.fillText(id, X + 12, cy + 1);
 
-        this._drawBar(ctx, BAR_X + 44, rowY + 1, 100, 5, Math.min(1, score / 30), col + '99');
+        // Barre
+        const barStart = X + 42;
+        const barW     = INNER_W - 42 - 24;
+        this._drawBar(ctx, barStart, cy + 3, barW, BAR_H - 1, Math.min(1, score / 30), col + '88');
 
-        ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.font = '9px monospace';
+        // Score
+        ctx.font      = '9px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.28)';
         ctx.textAlign = 'right';
-        ctx.fillText(score.toFixed(1), px + PW - PAD - 2, rowY);
+        ctx.fillText(score.toFixed(1), px + PW - PAD, cy + 1);
         ctx.textAlign = 'left';
-        rowY += 14;
+
+        cy += LINE_H;
       }
     }
 
-    // Sparkline humeur
-    if (e.moodHistory.length > 4 && rowY + 50 < py + PH - 10) {
-      rowY += 4;
-      ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(px + PAD, rowY);
-      ctx.lineTo(px + PW - PAD, rowY);
-      ctx.stroke();
-      rowY += 7;
-
+    // ── Sparkline humeur ────────────────────────────────────────────────────
+    if (hasSparkline) {
+      drawSep();
+      ctx.font      = 'bold 9px monospace';
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      ctx.font = 'bold 9px monospace';
-      ctx.fillText('HISTORIQUE HUMEUR', BAR_X, rowY);
-      rowY += 12;
+      ctx.fillText('HISTORIQUE HUMEUR', X, cy);
+      cy += 10 + 4;
 
-      const spW = BAR_W, spH = 24;
+      const spW = INNER_W, spH = 24;
       ctx.fillStyle = 'rgba(255,255,255,0.04)';
-      ctx.fillRect(BAR_X, rowY, spW, spH);
+      ctx.fillRect(X, cy, spW, spH);
 
-      // Ligne centrale
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+      ctx.lineWidth   = 1;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
-      ctx.moveTo(BAR_X, rowY + spH / 2);
-      ctx.lineTo(BAR_X + spW, rowY + spH / 2);
+      ctx.moveTo(X, cy + spH / 2);
+      ctx.lineTo(X + spW, cy + spH / 2);
       ctx.stroke();
       ctx.setLineDash([]);
 
-      const hist = e.moodHistory;
-      const step = spW / (hist.length - 1);
-      const sparkColor = e.mood >= 0 ? '#2ecc71' : '#e74c3c';
+      const hist  = e.moodHistory;
+      const step  = spW / Math.max(1, hist.length - 1);
+      const sColor = e.mood >= 0 ? '#2ecc71' : '#e74c3c';
 
       ctx.beginPath();
       for (let i = 0; i < hist.length; i++) {
-        const sx = BAR_X + i * step;
-        const sy = rowY + (1 - (hist[i] + 1) / 2) * spH;
-        if (i === 0) ctx.moveTo(sx, sy);
-        else         ctx.lineTo(sx, sy);
+        const sx = X + i * step;
+        const sy = cy + (1 - (hist[i] + 1) / 2) * spH;
+        if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
       }
-      ctx.strokeStyle = sparkColor;
+      ctx.strokeStyle = sColor;
       ctx.lineWidth   = 1.5;
       ctx.lineJoin    = 'round';
       ctx.stroke();
 
-      // Point courant
-      const lastX = BAR_X + (hist.length - 1) * step;
-      const lastY = rowY + (1 - (hist[hist.length - 1] + 1) / 2) * spH;
+      const lx = X + (hist.length - 1) * step;
+      const ly = cy + (1 - (hist[hist.length - 1] + 1) / 2) * spH;
       ctx.beginPath();
-      ctx.arc(lastX, lastY, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = sparkColor;
+      ctx.arc(lx, ly, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = sColor;
       ctx.fill();
     }
 
-    // Ligne pointillée vers l'entité — depuis le bord le plus proche
-    const panelCX = px + PW / 2;
-    const panelCY = py + PH / 2;
-    // Point d'ancrage : bord du panneau côté entité
-    let anchorX, anchorY;
-    if (e.x >= px + PW) {
-      anchorX = px + PW; anchorY = Math.max(py + 10, Math.min(py + PH - 10, e.y));
-    } else if (e.x <= px) {
-      anchorX = px;      anchorY = Math.max(py + 10, Math.min(py + PH - 10, e.y));
-    } else if (e.y <= py) {
-      anchorY = py;      anchorX = Math.max(px + 10, Math.min(px + PW - 10, e.x));
-    } else {
-      anchorY = py + PH; anchorX = Math.max(px + 10, Math.min(px + PW - 10, e.x));
-    }
+    // ── Ligne pointillée vers l'entité ──────────────────────────────────────
+    // Ancre : milieu bord droit du panneau (panneau toujours à gauche)
+    const anchorX = px + PW;
+    const anchorY = py + PH / 2;
 
-    ctx.strokeStyle = e.color + '66';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = e.color + '55';
+    ctx.lineWidth   = 1;
     ctx.setLineDash([4, 5]);
     ctx.beginPath();
     ctx.moveTo(anchorX, anchorY);
-    ctx.lineTo(e.x, e.y - e.radius - 4);
+    ctx.lineTo(e.x, e.y);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Petit cercle sur l'entité
+    // Cercle de sélection
     ctx.beginPath();
-    ctx.arc(e.x, e.y, e.radius + 5, 0, Math.PI * 2);
-    ctx.strokeStyle = e.color + '88';
-    ctx.lineWidth = 1.5;
+    ctx.arc(e.x, e.y, e.radius + 6, 0, Math.PI * 2);
+    ctx.strokeStyle = e.color + '77';
+    ctx.lineWidth   = 1.5;
     ctx.stroke();
 
     ctx.restore();

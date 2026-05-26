@@ -89,14 +89,26 @@
     const sim = new Simulation(canvas, infoPanel);
     sim.start();
 
-    // Tracking curseur (souris)
+    // Tracking curseur (souris) — fuite activée uniquement si Maj maintenue
     canvas.addEventListener('mousemove', (e) => {
-      sim.mouseX = e.clientX;
-      sim.mouseY = e.clientY;
+      if (e.shiftKey) {
+        sim.mouseX = e.clientX;
+        sim.mouseY = e.clientY;
+      } else {
+        sim.mouseX = -9999;
+        sim.mouseY = -9999;
+      }
     });
     canvas.addEventListener('mouseleave', () => {
       sim.mouseX = -9999;
       sim.mouseY = -9999;
+    });
+    // Relâcher Maj = désactiver la fuite immédiatement
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'Shift') {
+        sim.mouseX = -9999;
+        sim.mouseY = -9999;
+      }
     });
 
     // Click-to-inspect (souris)

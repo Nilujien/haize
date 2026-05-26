@@ -29,6 +29,7 @@
   <div id="event-console">
     <div id="event-console-header">
       <span id="event-console-title">◈ CONSOLE</span>
+      <span id="event-perf"></span>
       <span id="event-fps">-- fps</span>
     </div>
     <div id="event-console-body"></div>
@@ -197,6 +198,7 @@
     // ── Console événements HTML (mise à jour ~10fps) ──────────────────────
     const consoleBody = document.getElementById('event-console-body');
     const fpsBadge    = document.getElementById('event-fps');
+    const perfBadge   = document.getElementById('event-perf');
 
     const CATEGORY_COLORS = {
       conflict:   '#e74c3c',
@@ -222,6 +224,13 @@
         const fpsColor = fps >= 55 ? '#2ecc71' : fps >= 30 ? '#f1c40f' : '#e74c3c';
         fpsBadge.textContent = `${fps} fps`;
         fpsBadge.style.color = fpsColor;
+      }
+
+      // Perf badge (update/render ms)
+      if (sim.perfUpdate !== undefined) {
+        const u = sim.perfUpdate?.toFixed(1) ?? '?';
+        const r = sim.perfRender?.toFixed(1) ?? '?';
+        perfBadge.textContent = `u:${u}ms r:${r}ms`;
       }
 
       // Rebuild uniquement si le log a changé

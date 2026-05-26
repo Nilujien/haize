@@ -775,6 +775,17 @@ export class Simulation {
           e.vx += nx2 * force;
           e.vy += ny2 * force;
 
+          // ── Répulsion douce anti-chevauchement ──────────────────────────
+          // Zone : dist < 2 × rayon → les entités se frôlent mais ne se superposent pas au repos
+          const minDist = (e.radius + other.radius) * 2.2;
+          if (dist < minDist) {
+            const overlap = 1 - dist / minDist;
+            // Force quadratique : faible au frôlement, forte au chevauchement
+            const repulse = overlap * overlap * 0.6;
+            e.vx -= nx2 * repulse;
+            e.vy -= ny2 * repulse;
+          }
+
           if (dist < this.INTERACTION_RADIUS * 0.5) {
             const moodDelta = other.mood * 0.0003 * dt;
             e.mood = Math.max(-1, Math.min(1, e.mood + moodDelta));

@@ -203,49 +203,72 @@ class Heatmap {
     }
   }
 
-  // Rendu via ImageData pour performance
+  // Rendu via ImageData pour performance maximale (1 drawImage au lieu de N fillRect)
   render(ctx, W, H, alpha = 0.55) {
     if (!this.data) return;
+    if (!this._offscreenCanvas) return;
 
-    // Trouver le max pour normalisation
-    let maxVal = 1;
-    for (let i = 0; i < this.data.length; i++) {
-      if (this.data[i] > maxVal) maxVal = this.data[i];
+    // Ne redessiner l'offscreen que si les données ont changé
+    if (this._dirty) {
+      this._dirty = false;
+      const offCtx = this._offscreenCtx;
+      const oc = this._offscreenCanvas;
+
+      // Trouver le max pour normalisation
+      let maxVal = 1;
+      for (let i = 0; i < this.data.length; i++) {
+        if (this.data[i] > maxVal) maxVal = this.data[i];
+      }
+      const invMax = 1 / maxVal;
+
+      // Utiliser ImageData pour un seul transfert GPU
+      const imgData = offCtx.createImageData(oc.width, oc.height);
+      const pixels = imgData.data;
+
+      for (let row = 0; row < this.rows; row++) {
+        for (let col = 0; col < this.cols; col++) {
+          const v = this.data[row * this.cols + col] * invMax;
+          if (v < 0.01) continue;
+
+          let r, g, b;
+          if (v < 0.25) {
+            const t = v / 0.25;
+            r = 0; g = Math.round(t * 128); b = 200;
+          } else if (v < 0.5) {
+            const t = (v - 0.25) / 0.25;
+            r = 0; g = Math.round(128 + t * 127); b = Math.round(200 * (1 - t));
+          } else if (v < 0.75) {
+            const t = (v - 0.5) / 0.25;
+            r = Math.round(t * 255); g = 255; b = 0;
+          } else {
+            const t = (v - 0.75) / 0.25;
+            r = 255; g = Math.round(255 * (1 - t)); b = 0;
+          }
+
+          const a255 = Math.round(v * 200);
+          // Remplir le rectangle de la cellule dans ImageData
+          const x0 = col * HEATMAP_CELL;
+          const y0 = row * HEATMAP_CELL;
+          const x1 = Math.min(x0 + HEATMAP_CELL, oc.width);
+          const y1 = Math.min(y0 + HEATMAP_CELL, oc.height);
+          for (let py = y0; py < y1; py++) {
+            for (let px = x0; px < x1; px++) {
+              const idx = (py * oc.width + px) * 4;
+              pixels[idx]     = r;
+              pixels[idx + 1] = g;
+              pixels[idx + 2] = b;
+              pixels[idx + 3] = a255;
+            }
+          }
+        }
+      }
+      offCtx.putImageData(imgData, 0, 0);
     }
 
-    // Dessiner cellule par cellule avec interpolation de couleur
+    // Un seul drawImage vers le canvas principal
     ctx.save();
     ctx.globalAlpha = alpha;
-
-    for (let row = 0; row < this.rows; row++) {
-      for (let col = 0; col < this.cols; col++) {
-        const v = this.data[row * this.cols + col] / maxVal;
-        if (v < 0.01) continue;
-
-        // Gradient froid → chaud : bleu → cyan → vert → jaune → rouge
-        let r, g, b;
-        if (v < 0.25) {
-          const t = v / 0.25;
-          r = 0; g = Math.round(t * 128); b = 200;
-        } else if (v < 0.5) {
-          const t = (v - 0.25) / 0.25;
-          r = 0; g = Math.round(128 + t * 127); b = Math.round(200 * (1 - t));
-        } else if (v < 0.75) {
-          const t = (v - 0.5) / 0.25;
-          r = Math.round(t * 255); g = 255; b = 0;
-        } else {
-          const t = (v - 0.75) / 0.25;
-          r = 255; g = Math.round(255 * (1 - t)); b = 0;
-        }
-
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-        ctx.fillRect(
-          col * HEATMAP_CELL, row * HEATMAP_CELL,
-          HEATMAP_CELL, HEATMAP_CELL
-        );
-      }
-    }
-
+    ctx.drawImage(this._offscreenCanvas, 0, 0);
     ctx.restore();
   }
 
@@ -503,6 +526,9 @@ export class Simulation {
 
   // ── Boucle principale ──────────────────────────────────────────────────────
   start() {
+    // Throttle render : si le budget frame est dépassé, on skip le rendu 1 frame sur 2
+    this._renderSkipCounter = 0;
+
     const loop = (now) => {
       const rawDt = Math.min(now - this._lastTime, 50);
       this._lastTime = now;
@@ -525,9 +551,15 @@ export class Simulation {
         this._update(dt);
         this.perfUpdate = performance.now() - t0;
 
-        const t1 = performance.now();
-        this._render();
-        this.perfRender = performance.now() - t1;
+        // Adaptive render skip : si update > 8ms, skip render 1 frame sur 2
+        this._renderSkipCounter++;
+        const skipRender = this.perfUpdate > 8 && (this._renderSkipCounter % 2 === 0);
+
+        if (!skipRender) {
+          const t1 = performance.now();
+          this._render();
+          this.perfRender = performance.now() - t1;
+        }
 
         this._updatePanel();
       }
@@ -599,15 +631,15 @@ export class Simulation {
     this._updateProjects(dt);
     this.heatmap.decay(dt);
 
-    // Compter les voisins proches pour la fatigue sociale
+    // Réinitialiser compteurs voisins (passe O(n²) avec distSq — pas de sqrt)
     this._neighborCount = {};
-    for (const e of entities) this._neighborCount[e.id] = 0;
+    for (let k = 0; k < entities.length; k++) this._neighborCount[entities[k].id] = 0;
+    const neighborThreshSq = (this.INTERACTION_RADIUS * 0.6) * (this.INTERACTION_RADIUS * 0.6);
     for (let i = 0; i < entities.length; i++) {
       for (let j = i + 1; j < entities.length; j++) {
         const a = entities[i], b = entities[j];
         const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < this.INTERACTION_RADIUS * 0.6) {
+        if (dx * dx + dy * dy < neighborThreshSq) {
           this._neighborCount[a.id]++;
           this._neighborCount[b.id]++;
         }
@@ -728,15 +760,21 @@ export class Simulation {
       }
 
       // Interactions avec les autres entités + mémorisation
+      const _interactRadSq = this.INTERACTION_RADIUS * this.INTERACTION_RADIUS;
       for (const other of entities) {
         if (other === e) continue;
         const dx = other.x - e.x;
         const dy = other.y - e.y;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const nx2 = dx / dist, ny2 = dy / dist;
+        const distSq = dx * dx + dy * dy;
 
-        // Conflit agressif
-        if (dist < this.CONFLICT_RADIUS &&
+        if (distSq >= _interactRadSq) continue;
+
+        const dist = Math.sqrt(distSq);
+        const nx2 = dx / dist, ny2 = dy / dist;
+        const t = 1 - dist / this.INTERACTION_RADIUS;
+
+        // Conflit agressif (dans CONFLICT_RADIUS)
+        if (distSq < this.CONFLICT_RADIUS * this.CONFLICT_RADIUS &&
             e.character.agression > 0.55 &&
             other.character.agression > 0.55) {
           const f = 0.25 * (1 - dist / this.CONFLICT_RADIUS);
@@ -761,9 +799,7 @@ export class Simulation {
           }
         }
 
-        if (dist < this.INTERACTION_RADIUS) {
-          const t = 1 - dist / this.INTERACTION_RADIUS;
-
+        {
           const affinity = e.getAffinityWith(other.id);
           const socialForce = (e.character.socialite + other.character.socialite) / 2;
           const attractBase = socialForce - 0.3;
@@ -837,9 +873,12 @@ export class Simulation {
         e.energy = Math.min(100, e.energy + 0.04 * dt);
       }
 
-      // Trail
+      // Trail (longueur adaptive selon FPS)
+      const adaptiveTrailMax = this.fps > 0 && this.fps < 45
+        ? Math.max(4, Math.floor(e.trailMaxLen * this.fps / 60))
+        : e.trailMaxLen;
       e.trail.push({ x: e.x, y: e.y });
-      if (e.trail.length > e.trailMaxLen) e.trail.shift();
+      if (e.trail.length > adaptiveTrailMax) e.trail.shift();
 
       // Humeur drift
       e.mood += (Math.random() - 0.5) * 0.0005 * dt;
@@ -1055,6 +1094,7 @@ export class Simulation {
 
   // ── Rendu Canvas ──────────────────────────────────────────────────────────
   _render() {
+    const entities = this.entities;
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
 
@@ -1084,34 +1124,34 @@ export class Simulation {
       this._renderEventOverlay(ctx, W, H);
     }
 
-    // Lignes de connexion
-    const entities = this.entities;
+    // Lignes de connexion (distSq pour éviter sqrt)
+    const interactRadSq = this.INTERACTION_RADIUS * this.INTERACTION_RADIUS;
     for (let i = 0; i < entities.length; i++) {
       for (let j = i + 1; j < entities.length; j++) {
         const a = entities[i], b = entities[j];
         const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < this.INTERACTION_RADIUS) {
-          const alpha = (1 - dist / this.INTERACTION_RADIUS) * 0.3;
-          const affinity = a.getAffinityWith(b.id);
-          const lineAlpha = alpha + affinity * 0.2;
+        const distSq2 = dx*dx + dy*dy;
+        if (distSq2 >= interactRadSq) continue;
+        const dist = Math.sqrt(distSq2);
+        const alpha = (1 - dist / this.INTERACTION_RADIUS) * 0.3;
+        const affinity = a.getAffinityWith(b.id);
+        const lineAlpha = alpha + affinity * 0.2;
 
-          const isSelected = (a === this.selectedEntity || b === this.selectedEntity);
+        const isSelected = (a === this.selectedEntity || b === this.selectedEntity);
 
-          ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          if (isSelected) {
-            ctx.strokeStyle = `rgba(255,255,255,${(lineAlpha * 2.5).toFixed(2)})`;
-            ctx.lineWidth = 2;
-          } else {
-            ctx.strokeStyle = affinity > 0
-              ? `rgba(255,220,100,${lineAlpha.toFixed(2)})`
-              : `rgba(150,160,200,${lineAlpha.toFixed(2)})`;
-            ctx.lineWidth = affinity > 0 ? 1.5 : 0.8;
-          }
-          ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        if (isSelected) {
+          ctx.strokeStyle = `rgba(255,255,255,${(lineAlpha * 2.5).toFixed(2)})`;
+          ctx.lineWidth = 2;
+        } else {
+          ctx.strokeStyle = affinity > 0
+            ? `rgba(255,220,100,${lineAlpha.toFixed(2)})`
+            : `rgba(150,160,200,${lineAlpha.toFixed(2)})`;
+          ctx.lineWidth = affinity > 0 ? 1.5 : 0.8;
         }
+        ctx.stroke();
       }
     }
 
@@ -1516,6 +1556,7 @@ export class Simulation {
     const entities = this.entities;
     const now = performance.now();
     const pulse = 0.5 + Math.sin(now * 0.0015) * 0.3;
+    const interactRadSq = this.INTERACTION_RADIUS * this.INTERACTION_RADIUS;
 
     // Pour chaque paire, vérifier si le score d'interaction est assez élevé
     for (let i = 0; i < entities.length; i++) {
@@ -1529,22 +1570,18 @@ export class Simulation {
         if (score < this.FRIENDSHIP_THRESHOLD) continue;
 
         const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const distSq = dx * dx + dy * dy;
 
         // Seulement si pas déjà trop proches (éviter le doublon avec la ligne de proximité)
-        if (dist < this.INTERACTION_RADIUS) continue;
-        if (dist > 700) continue;
+        if (distSq < interactRadSq) continue;
+        if (distSq > 700 * 700) continue;
 
+        const dist = Math.sqrt(distSq);
         const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
         const alpha = strength * pulse * 0.35;
 
-        // Couleur intermédiaire entre les deux entités
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
-
-        // Courbe de Bezier légèrement courbée pour un rendu organique
-        const mx = (a.x + b.x) / 2 + (Math.random() - 0.5) * 0; // statique, sinon trop agité
-        const my = (a.x + b.x) / 2; // on garde droit
         ctx.lineTo(b.x, b.y);
 
         ctx.strokeStyle = `rgba(255,200,100,${alpha.toFixed(3)})`;
@@ -1593,6 +1630,10 @@ export class Simulation {
 
   // ── Spawn d'un emoji flottant ─────────────────────────────────────────────
   _spawnFloatingEmoji(x, y, text) {
+    // Cap à 15 simultanés pour éviter l'accumulation
+    if (this._floatingEmojis.length >= 15) {
+      this._floatingEmojis.shift(); // retirer le plus ancien
+    }
     this._floatingEmojis.push({
       x,
       y: y - 20,
@@ -1667,24 +1708,32 @@ export class Simulation {
       const baseAlpha = 0.03 + introFactor * 0.04;
       const alpha = isInTerritory ? baseAlpha * 1.8 : baseAlpha;
 
-      // Cercle de territoire
       const pulse = 1 + Math.sin(now * 0.0008 + e._noiseOffsetX) * 0.04;
+      const effectiveRadius = e.homeRadius * pulse;
 
       ctx.save();
       ctx.beginPath();
-      ctx.arc(e.homeX, e.homeY, e.homeRadius * pulse, 0, Math.PI * 2);
-      const grad = ctx.createRadialGradient(
-        e.homeX, e.homeY, e.homeRadius * 0.3,
-        e.homeX, e.homeY, e.homeRadius * pulse
-      );
-      grad.addColorStop(0, e.color + Math.round(alpha * 255 * 1.5).toString(16).padStart(2,'0'));
-      grad.addColorStop(1, e.color + '00');
-      ctx.fillStyle = grad;
+      ctx.arc(e.homeX, e.homeY, effectiveRadius, 0, Math.PI * 2);
+
+      // Gradient : créer seulement si le home a bougé de plus de 5px
+      const cacheKey = `${Math.round(e.homeX/5)*5}_${Math.round(e.homeY/5)*5}`;
+      if (!e._territoryGradCache || e._territoryGradCacheKey !== cacheKey) {
+        e._territoryGradCache = ctx.createRadialGradient(
+          e.homeX, e.homeY, e.homeRadius * 0.3,
+          e.homeX, e.homeY, effectiveRadius
+        );
+        const alphaHex1 = Math.round(alpha * 255 * 1.5).toString(16).padStart(2,'0');
+        e._territoryGradCache.addColorStop(0, e.color + alphaHex1);
+        e._territoryGradCache.addColorStop(1, e.color + '00');
+        e._territoryGradCacheKey = cacheKey;
+      }
+
+      ctx.fillStyle = e._territoryGradCache;
       ctx.fill();
 
       // Contour pointillé discret
       ctx.beginPath();
-      ctx.arc(e.homeX, e.homeY, e.homeRadius * pulse, 0, Math.PI * 2);
+      ctx.arc(e.homeX, e.homeY, effectiveRadius, 0, Math.PI * 2);
       ctx.strokeStyle = e.color + Math.round(alpha * 255 * 3).toString(16).padStart(2,'0');
       ctx.lineWidth = 0.8;
       ctx.setLineDash([3, 12]);
@@ -1737,12 +1786,14 @@ export class Simulation {
       ctx.stroke();
     }
 
-    // Halo humeur
-    if (Math.abs(e.mood) > 0.15) {
+    // Halo humeur (skip si mood faible pour économiser les gradients)
+    const absMood = Math.abs(e.mood);
+    if (absMood > 0.15) {
+      const haloAlpha = absMood * 0.35;
       const haloColor = e.mood > 0
-        ? `rgba(46,204,113,${(e.mood * 0.35).toFixed(2)})`
-        : `rgba(231,76,60,${(-e.mood * 0.35).toFixed(2)})`;
-      const haloR = r * (1.6 + Math.abs(e.mood) * 0.8);
+        ? `rgba(46,204,113,${haloAlpha.toFixed(2)})`
+        : `rgba(231,76,60,${haloAlpha.toFixed(2)})`;
+      const haloR = r * (1.6 + absMood * 0.8);
       const grad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, haloR);
       grad.addColorStop(0, haloColor);
       grad.addColorStop(1, 'transparent');

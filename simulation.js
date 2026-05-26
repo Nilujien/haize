@@ -2,11 +2,10 @@
  * simulation.js
  * Boucle principale, physique, interactions, rendu Canvas.
  *
- * Nouveautés v3 :
- *  - Heatmap de présence (touche H pour basculer)
- *  - Fatigue sociale / état SATURE pour les introvertis
- *  - Sauvegarde / Chargement état JSON (localStorage)
- *  - Bouton Save/Load dans les contrôles
+ * Nouveautés v4 :
+ *  - Territorialité : chaque entité a un "home" vers lequel elle est attirée en ERRANCE
+ *  - Boutons de déclenchement manuel d'événements globaux
+ *  - Support tactile (tap pour inspecter sur mobile)
  */
 
 import { Entity, ENTITY_DEFS, AFFINITES, STATE, Project } from './entities.js';
@@ -357,6 +356,16 @@ export class Simulation {
     this.showHeatmap = !this.showHeatmap;
   }
 
+  // ── Déclencher un événement global manuellement ────────────────────────────
+  triggerEvent(type) {
+    const ev = GLOBAL_EVENTS.find(e => e.type === type);
+    if (!ev) return;
+    // Interrompre l'événement actuel si besoin
+    this.activeEvent  = ev;
+    this._eventTimer  = 0;
+    this._nextEventIn = 25000 + Math.random() * 25000;
+  }
+
   // ── Sauvegarde ─────────────────────────────────────────────────────────────
   save() {
     try {
@@ -540,6 +549,29 @@ export class Simulation {
           e.state = STATE.FUITE;
           e._stateTimer = 0;
         }
+      }
+
+      // ── Territorialité : attraction vers le home en ERRANCE/REPOS ─────────
+      if (e.state === STATE.ERRANCE || e.state === STATE.REPOS) {
+        const hdx = e.homeX - e.x;
+        const hdy = e.homeY - e.y;
+        const hdist = Math.sqrt(hdx * hdx + hdy * hdy) || 1;
+        // Attraction douce proportionnelle à la distance
+        const introFactor2 = 1 - e.character.extraversion; // introvertis plus attachés
+        const homePull = (0.005 + introFactor2 * 0.01) * Math.min(1, hdist / 200);
+        e.vx += (hdx / hdist) * homePull * dt * 0.1;
+        e.vy += (hdy / hdist) * homePull * dt * 0.1;
+      }
+
+      // ── Dérive lente du home (territoire se déplace très lentement) ───────
+      e._homeWanderTimer = (e._homeWanderTimer || 0) + dt;
+      if (e._homeWanderTimer > 15000 && e.state !== STATE.FUITE && e.state !== STATE.SATURE) {
+        e._homeWanderTimer = 0;
+        const wander = 30 * e.character.extraversion;
+        e.homeX = Math.max(80, Math.min(this.canvas.width - 80,
+          e.homeX + (Math.random() - 0.5) * wander));
+        e.homeY = Math.max(80, Math.min(this.canvas.height - 80,
+          e.homeY + (Math.random() - 0.5) * wander));
       }
 
       // ── Fuite sociale (entité saturée) ────────────────────────────────
@@ -899,6 +931,9 @@ export class Simulation {
     for (const proj of this.projects) {
       this._renderProject(ctx, proj);
     }
+
+    // ── Zones de territoire ─────────────────────────────────────────────
+    this._renderTerritories(ctx);
 
     // Entités
     for (const e of entities) {
@@ -1291,6 +1326,49 @@ export class Simulation {
       life: 1800 + Math.random() * 600,
       size: 14 + Math.floor(Math.random() * 4),
     });
+  }
+
+  // ── Rendu des zones de territoire ────────────────────────────────────────
+  _renderTerritories(ctx) {
+    const now = performance.now();
+    for (const e of this.entities) {
+      // N'afficher que pour les entités ERRANCE, REPOS, ou sélectionnées
+      const isHome = e.state === STATE.ERRANCE || e.state === STATE.REPOS || e === this.selectedEntity;
+      if (!isHome) continue;
+
+      const dist = Math.hypot(e.x - e.homeX, e.y - e.homeY);
+      const isInTerritory = dist < e.homeRadius;
+
+      // Opacité : plus visible pour introvertis + quand entité est dans le territoire
+      const introFactor = 1 - e.character.extraversion;
+      const baseAlpha = 0.03 + introFactor * 0.04;
+      const alpha = isInTerritory ? baseAlpha * 1.8 : baseAlpha;
+
+      // Cercle de territoire
+      const pulse = 1 + Math.sin(now * 0.0008 + e._noiseOffsetX) * 0.04;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(e.homeX, e.homeY, e.homeRadius * pulse, 0, Math.PI * 2);
+      const grad = ctx.createRadialGradient(
+        e.homeX, e.homeY, e.homeRadius * 0.3,
+        e.homeX, e.homeY, e.homeRadius * pulse
+      );
+      grad.addColorStop(0, e.color + Math.round(alpha * 255 * 1.5).toString(16).padStart(2,'0'));
+      grad.addColorStop(1, e.color + '00');
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Contour pointillé discret
+      ctx.beginPath();
+      ctx.arc(e.homeX, e.homeY, e.homeRadius * pulse, 0, Math.PI * 2);
+      ctx.strokeStyle = e.color + Math.round(alpha * 255 * 3).toString(16).padStart(2,'0');
+      ctx.lineWidth = 0.8;
+      ctx.setLineDash([3, 12]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
   }
 
   _renderEntity(ctx, e) {

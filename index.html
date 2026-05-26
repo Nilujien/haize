@@ -11,21 +11,21 @@
   <!-- Canvas principal -->
   <canvas id="main-canvas"></canvas>
 
-  <!-- ── Panel info ─────────────────────────────────────────────────── -->
+  <!-- Panel info -->
   <div id="info-panel">
     <div class="cycle-indicator">☀️ Chargement…</div>
   </div>
 
-  <!-- ── Titre ─────────────────────────────────────────────────────── -->
+  <!-- Titre -->
   <div id="title">HAIZE</div>
 
-  <!-- ── Légende ───────────────────────────────────────────────────── -->
+  <!-- Légende -->
   <div id="legend">
     <h3>Entités</h3>
     <!-- généré par JS -->
   </div>
 
-  <!-- ── Contrôles ─────────────────────────────────────────────────── -->
+  <!-- Contrôles -->
   <div id="controls">
     <button class="ctrl-btn" id="btn-pause">⏸ Pause</button>
     <span class="ctrl-label">Vitesse</span>
@@ -36,13 +36,19 @@
     <button class="ctrl-btn ctrl-btn--accent" id="btn-save">💾 Save</button>
     <button class="ctrl-btn" id="btn-load">📂 Load</button>
     <button class="ctrl-btn ctrl-btn--dim" id="btn-heatmap" title="Touche H">🌡️</button>
+    <span class="ctrl-sep"></span>
+    <span class="ctrl-label">Événements</span>
+    <button class="ctrl-btn ctrl-btn--event" id="btn-ev-tempete"  title="Déclencher Tempête">🌪️</button>
+    <button class="ctrl-btn ctrl-btn--event" id="btn-ev-fete"     title="Déclencher Grande Fête">🎊</button>
+    <button class="ctrl-btn ctrl-btn--event" id="btn-ev-tension"  title="Déclencher Vague de Tension">⚡</button>
+    <button class="ctrl-btn ctrl-btn--event" id="btn-ev-deprime"  title="Déclencher Vague Dépressive">😶</button>
   </div>
 
   <script type="module">
     import { ENTITY_DEFS, AFFINITES } from './entities.js';
     import { Simulation } from './simulation.js';
 
-    // ── Canvas setup ─────────────────────────────────────────────────
+    // Canvas setup
     const canvas    = document.getElementById('main-canvas');
     const infoPanel = document.getElementById('info-panel');
     const legend    = document.getElementById('legend');
@@ -53,7 +59,7 @@
     }
     resizeCanvas();
 
-    // ── Légende ────────────────────────────────────────────────────
+    // Légende
     let legendHtml = '<h3>Entités</h3>';
     for (const def of ENTITY_DEFS) {
       legendHtml += `
@@ -79,11 +85,11 @@
     }
     legend.innerHTML = legendHtml;
 
-    // ── Simulation ─────────────────────────────────────────────────
+    // Simulation
     const sim = new Simulation(canvas, infoPanel);
     sim.start();
 
-    // ── Tracking curseur ───────────────────────────────────────────
+    // Tracking curseur (souris)
     canvas.addEventListener('mousemove', (e) => {
       sim.mouseX = e.clientX;
       sim.mouseY = e.clientY;
@@ -93,23 +99,43 @@
       sim.mouseY = -9999;
     });
 
-    // ── Click-to-inspect ────────────────────────────────────────
+    // Click-to-inspect (souris)
     canvas.addEventListener('click', (e) => {
       sim.handleClick(e.clientX, e.clientY);
     });
     canvas.style.cursor = 'crosshair';
 
-    // ── Resize ─────────────────────────────────────────────────────
+    // Support tactile (touch) — tap pour inspecter, swipe ignoré
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      sim.mouseX = t.clientX;
+      sim.mouseY = t.clientY;
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      sim.handleClick(t.clientX, t.clientY);
+      // Masquer le curseur fantôme après tap
+      setTimeout(() => { sim.mouseX = -9999; sim.mouseY = -9999; }, 800);
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+    }, { passive: false });
+
+    // Resize
     window.addEventListener('resize', () => {
       resizeCanvas();
       sim.resize();
     });
 
-    // ── Contrôles ──────────────────────────────────────────────────
-    const btnPause   = document.getElementById('btn-pause');
+    // Contrôles
+    const btnPause    = document.getElementById('btn-pause');
     const speedSlider = document.getElementById('speed-slider');
-    const speedVal   = document.getElementById('speed-val');
-    const btnReset   = document.getElementById('btn-reset');
+    const speedVal    = document.getElementById('speed-val');
+    const btnReset    = document.getElementById('btn-reset');
 
     btnPause.addEventListener('click', () => {
       sim.paused = !sim.paused;
@@ -126,11 +152,11 @@
       sim.reset();
     });
 
-    // ── Save / Load ─────────────────────────────────────────────────────
+    // Save / Load
     document.getElementById('btn-save').addEventListener('click', () => sim.save());
     document.getElementById('btn-load').addEventListener('click', () => sim.load());
 
-    // ── Heatmap toggle (bouton + touche H) ──────────────────────────────
+    // Heatmap toggle (bouton + touche H)
     const btnHeatmap = document.getElementById('btn-heatmap');
     function toggleHeatmap() {
       sim.toggleHeatmap();
@@ -140,6 +166,12 @@
     window.addEventListener('keydown', (e) => {
       if (e.key === 'h' || e.key === 'H') toggleHeatmap();
     });
+
+    // Déclencheurs d'événements manuels
+    document.getElementById('btn-ev-tempete').addEventListener('click', () => sim.triggerEvent('TEMPETE'));
+    document.getElementById('btn-ev-fete').addEventListener('click',    () => sim.triggerEvent('FETE'));
+    document.getElementById('btn-ev-tension').addEventListener('click', () => sim.triggerEvent('TENSION'));
+    document.getElementById('btn-ev-deprime').addEventListener('click', () => sim.triggerEvent('DEPRIME'));
   </script>
 </body>
 </html>

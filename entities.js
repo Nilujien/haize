@@ -112,9 +112,15 @@ export class Entity {
 
     this.character = { ...def.character };
 
-    const margin = 60;
+    const margin = 80;
     this.x  = margin + Math.random() * (canvasW - margin * 2);
     this.y  = margin + Math.random() * (canvasH - margin * 2);
+
+    // ── Territoire (zone domicile) ─────────────────────────────────────────
+    // Rayon = 80..160px selon introversion (introvertis ont territoire plus petit/défendu)
+    this.homeX = this.x;
+    this.homeY = this.y;
+    this.homeRadius = 100 + (1 - this.character.extraversion) * 80;
 
     const speed = 0.5 + this.character.extraversion * 1.5;
     const angle = Math.random() * Math.PI * 2;
@@ -130,6 +136,9 @@ export class Entity {
     this.socialCharge = 0; // 0..100
 
     this.state = STATE.ERRANCE;
+
+    // Territoire : dérive lente du centre domicile au fil du temps
+    this._homeWanderTimer = 0;
 
     this.trail = [];
     this.trailMaxLen = 18;
@@ -180,6 +189,8 @@ export class Entity {
       successCount: this.successCount,
       interactionLog: { ...this.interactionLog },
       moodHistory: [...this.moodHistory],
+      homeX: this.homeX,
+      homeY: this.homeY,
     };
   }
 
@@ -192,6 +203,8 @@ export class Entity {
     this.successCount = snap.successCount ?? 0;
     this.interactionLog = { ...(snap.interactionLog ?? {}) };
     this.moodHistory  = [...(snap.moodHistory ?? [])];
+    if (snap.homeX !== undefined) this.homeX = snap.homeX;
+    if (snap.homeY !== undefined) this.homeY = snap.homeY;
   }
 }
 

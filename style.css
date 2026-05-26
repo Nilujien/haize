@@ -227,6 +227,21 @@ canvas {
 }
 .ctrl-btn--dim:hover { opacity: 1 !important; background: rgba(255,255,255,0.10); }
 
+/* Boutons événements */
+.ctrl-btn--event {
+  padding: 5px 10px;
+  font-size: 14px;
+  border-color: rgba(255,255,255,0.15);
+  transition: transform 0.1s, background 0.15s;
+}
+.ctrl-btn--event:hover {
+  background: rgba(255,200,50,0.18);
+  transform: scale(1.15);
+}
+.ctrl-btn--event:active {
+  transform: scale(0.95);
+}
+
 .state-sature { background: rgba(255,118,117,0.25); color: #ff7675; }
 .event-tag {
   font-size: 10px;

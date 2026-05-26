@@ -121,6 +121,40 @@ const GLOBAL_EVENTS = [
       }
     },
   },
+  {
+    type: 'EPIDEMIE',
+    label: '🦠 Épidémie d\'Humeur',
+    color: '#55efc4',
+    duration: 20000,
+    description: 'Patient zéro — la déprime se propage par contact entre entités',
+    _initialized: false,
+    _patientZero: null,
+    apply(entities, dt) {
+      // Initialisation : choisir un patient zéro aléatoire et le contaminer
+      if (!this._initialized) {
+        this._initialized = true;
+        this._patientZero = entities[Math.floor(Math.random() * entities.length)];
+        this._patientZero.mood = -0.8;
+      }
+      // Propagation : les entités très proches s'infectent mutuellement (tirant vers la plus basse humeur)
+      for (let i = 0; i < entities.length; i++) {
+        for (let j = i + 1; j < entities.length; j++) {
+          const a = entities[i], b = entities[j];
+          const dist = Math.hypot(a.x - b.x, a.y - b.y);
+          if (dist < 100) {
+            const spreadRate = 0.00025 * dt * (1 - dist / 100);
+            if (a.mood < b.mood) {
+              b.mood = Math.max(-1, b.mood - spreadRate * Math.abs(a.mood - b.mood));
+            } else {
+              a.mood = Math.max(-1, a.mood - spreadRate * Math.abs(b.mood - a.mood));
+            }
+          }
+        }
+      }
+    },
+    // Réinitialiser entre les déclenchements
+    reset() { this._initialized = false; this._patientZero = null; },
+  },
 ];
 
 // ─── Heatmap ──────────────────────────────────────────────────────────────────
@@ -299,6 +333,13 @@ export class Simulation {
     // ── Floating emojis (bulles d'état flottantes)
     this._floatingEmojis = []; // { x, y, vx, vy, text, born, life, size }
 
+    // ── Pensées ambiantes (bulles lentes et grandes au-dessus des entités)
+    this._thoughtBubbles = []; // { entityId, x, y, text, born, life }
+    this._thoughtTimers  = {}; // entityId → timer avant prochaine pensée
+
+    // ── Compteur de jours
+    this.dayCount = 1;
+
     // ── Mood history sampling
     this._moodSampleTimer = 0;
     this.MOOD_SAMPLE_INTERVAL = 500; // ms (game time)
@@ -344,6 +385,9 @@ export class Simulation {
     this.heatmap.reset();
     this._notification   = null;
     this._floatingEmojis = [];
+    this._thoughtBubbles = [];
+    this._thoughtTimers  = {};
+    this.dayCount        = 1;
     this._moodSampleTimer = 0;
     this._lastConflictLog = {};
     this._lastSocialLog   = {};
@@ -377,6 +421,8 @@ export class Simulation {
   triggerEvent(type) {
     const ev = GLOBAL_EVENTS.find(e => e.type === type);
     if (!ev) return;
+    // Réinitialiser l'état interne de l'événement si disponible (ex : épidémie)
+    if (typeof ev.reset === 'function') ev.reset();
     // Interrompre l'événement actuel si besoin
     this.activeEvent  = ev;
     this._eventTimer  = 0;
@@ -505,7 +551,8 @@ export class Simulation {
       if (this.isNight) {
         this.pushEvent('🌙 La nuit tombe — les entités ralentissent', '#6c88c4', 'cycle');
       } else {
-        this.pushEvent('☀️ Lever du jour — simulation active', '#f9ca24', 'cycle');
+        this.dayCount++;
+        this.pushEvent(`☀️ Jour ${this.dayCount} — simulation active`, '#f9ca24', 'cycle');
       }
     }
   }
@@ -534,7 +581,9 @@ export class Simulation {
     } else {
       this._eventTimer += dt;
       if (this._eventTimer >= this._nextEventIn) {
-        this.activeEvent  = GLOBAL_EVENTS[Math.floor(Math.random() * GLOBAL_EVENTS.length)];
+        const nextEv = GLOBAL_EVENTS[Math.floor(Math.random() * GLOBAL_EVENTS.length)];
+        if (typeof nextEv.reset === 'function') nextEv.reset();
+        this.activeEvent  = nextEv;
         this._eventTimer  = 0;
       }
     }
@@ -808,6 +857,33 @@ export class Simulation {
       }
     }
 
+    // ── Pensées ambiantes ─────────────────────────────────────────────────
+    const THOUGHT_INTERVAL_MIN = 8000;
+    const THOUGHT_INTERVAL_MAX = 18000;
+    for (const e of entities) {
+      this._thoughtTimers[e.id] = (this._thoughtTimers[e.id] || 0) + dt;
+      const interval = THOUGHT_INTERVAL_MIN +
+        (1 - e.character.extraversion) * (THOUGHT_INTERVAL_MAX - THOUGHT_INTERVAL_MIN);
+      if (this._thoughtTimers[e.id] >= interval) {
+        this._thoughtTimers[e.id] = 0;
+        const thought = this._pickThought(e);
+        if (thought) {
+          this._thoughtBubbles.push({
+            entityId: e.id,
+            x: e.x,
+            y: e.y,
+            radius: e.radius,
+            text: thought,
+            born: performance.now(),
+            life: 2800 + Math.random() * 1200,
+          });
+        }
+      }
+    }
+    // Nettoyer pensées expirées
+    const nowT = performance.now();
+    this._thoughtBubbles = this._thoughtBubbles.filter(t => (nowT - t.born) < t.life);
+
     // ── Mise à jour emojis flottants ──────────────────────────────────────
     const now2 = performance.now();
     this._floatingEmojis = this._floatingEmojis.filter(fe => {
@@ -1046,6 +1122,9 @@ export class Simulation {
 
     // ── Emojis flottants ───────────────────────────────────────────────────
     this._renderFloatingEmojis(ctx);
+
+    // ── Pensées ambiantes ──────────────────────────────────────────────────
+    this._renderThoughtBubbles(ctx);
 
     // Bannière événement
     if (this.activeEvent && this._eventBannerOpacity > 0) {
@@ -1563,7 +1642,53 @@ export class Simulation {
     });
   }
 
-  // ── Rendu des zones de territoire ────────────────────────────────────────
+  // ── Choisir une pensée ambiante selon l'état/humeur de l'entité ──────────
+  _pickThought(e) {
+    const thoughts = {
+      [STATE.REPOS]:   ['💤', '😴', '🌙', 'zzz…'],
+      [STATE.SOCIAL]:  ['😄', '💬', '🤝', '✨'],
+      [STATE.ACTIF]:   ['⚡', '🔥', '💪', '🏃'],
+      [STATE.FUITE]:   ['😱', '💨', '👻', '😰'],
+      [STATE.SATURE]:  ['😵', '🤯', '😤', '🙅'],
+      [STATE.PROJET]:  ['🔧', '🛠️', '🎯', '💡'],
+      [STATE.ERRANCE]: ['🌀', '🤔', '👀', '🚶'],
+    };
+    const moodBonus = e.mood > 0.5  ? ['😊', '💛', '🌟'] :
+                      e.mood < -0.5 ? ['😢', '💔', '😞'] : [];
+    const pool = [...(thoughts[e.state] || []), ...moodBonus];
+    if (pool.length === 0) return null;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  // ── Rendu des pensées ambiantes ────────────────────────────────────────────
+  _renderThoughtBubbles(ctx) {
+    if (this._thoughtBubbles.length === 0) return;
+    const now = performance.now();
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const t of this._thoughtBubbles) {
+      const age = now - t.born;
+      const progress = age / t.life;
+      // Apparaît doucement, flotte vers le haut, disparaît
+      const alpha = progress < 0.2 ? progress / 0.2 : Math.max(0, 1 - (progress - 0.2) / 0.8);
+      const rise = progress * 28; // monte de 28px sur toute la durée
+
+      // Petite bulle de fond
+      const bx = t.x, by = t.y - (t.radius || 22) - 18 - rise;
+      ctx.globalAlpha = alpha * 0.7;
+      ctx.fillStyle = 'rgba(20,22,40,0.75)';
+      ctx.beginPath();
+      ctx.roundRect(bx - 14, by - 12, 28, 24, 8);
+      ctx.fill();
+
+      ctx.globalAlpha = alpha;
+      ctx.font = '16px monospace';
+      ctx.fillText(t.text, bx, by);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
   _renderTerritories(ctx) {
     const now = performance.now();
     for (const e of this.entities) {
@@ -1904,7 +2029,7 @@ export class Simulation {
     const pct = Math.round((cycleElapsed / this.dayDuration) * 100);
     const cycleLabel = this.isNight ? '🌙 Nuit' : '☀️ Jour';
 
-    let html = `<div class="cycle-indicator">${cycleLabel} — ${pct}%</div>`;
+    let html = `<div class="cycle-indicator">${cycleLabel} — Jour ${this.dayCount} (${pct}%)</div>`;
 
     if (this.activeEvent) {
       const evPct = Math.round(this._eventTimer / this.activeEvent.duration * 100);

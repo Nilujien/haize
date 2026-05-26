@@ -52,6 +52,7 @@
     <button class="ctrl-btn ctrl-btn--event" id="btn-ev-fete"     title="Déclencher Grande Fête">🎊</button>
     <button class="ctrl-btn ctrl-btn--event" id="btn-ev-tension"  title="Déclencher Vague de Tension">⚡</button>
     <button class="ctrl-btn ctrl-btn--event" id="btn-ev-deprime"  title="Déclencher Vague Dépressive">😶</button>
+    <button class="ctrl-btn ctrl-btn--event" id="btn-ev-epidemie" title="Déclencher Épidémie d'Humeur">🦠</button>
   </div>
 
   <script type="module">
@@ -194,6 +195,7 @@
     document.getElementById('btn-ev-fete').addEventListener('click',    () => sim.triggerEvent('FETE'));
     document.getElementById('btn-ev-tension').addEventListener('click', () => sim.triggerEvent('TENSION'));
     document.getElementById('btn-ev-deprime').addEventListener('click', () => sim.triggerEvent('DEPRIME'));
+    document.getElementById('btn-ev-epidemie').addEventListener('click', () => sim.triggerEvent('EPIDEMIE'));
 
     // ── Console événements HTML (mise à jour ~10fps) ──────────────────────
     const consoleBody = document.getElementById('event-console-body');

@@ -180,6 +180,33 @@ class Heatmap {
     this._offscreenCanvas = new OffscreenCanvas(W, H);
     this._offscreenCtx    = this._offscreenCanvas.getContext('2d');
     this._dirty = true;
+    this._buildLUT();
+  }
+
+  // LUT précalculée : 256 entrées [r, g, b, a] → ~3× plus rapide sur dirty frames
+  _buildLUT() {
+    this._lut = new Uint8Array(256 * 4);
+    for (let i = 0; i < 256; i++) {
+      const v = i / 255;
+      let r, g, b;
+      if (v < 0.25) {
+        const t = v / 0.25;
+        r = 0; g = Math.round(t * 128); b = 200;
+      } else if (v < 0.5) {
+        const t = (v - 0.25) / 0.25;
+        r = 0; g = Math.round(128 + t * 127); b = Math.round(200 * (1 - t));
+      } else if (v < 0.75) {
+        const t = (v - 0.5) / 0.25;
+        r = Math.round(t * 255); g = 255; b = 0;
+      } else {
+        const t = (v - 0.75) / 0.25;
+        r = 255; g = Math.round(255 * (1 - t)); b = 0;
+      }
+      this._lut[i * 4]     = r;
+      this._lut[i * 4 + 1] = g;
+      this._lut[i * 4 + 2] = b;
+      this._lut[i * 4 + 3] = Math.round(v * 200);
+    }
   }
 
   record(x, y) {
@@ -230,22 +257,12 @@ class Heatmap {
           const v = this.data[row * this.cols + col] * invMax;
           if (v < 0.01) continue;
 
-          let r, g, b;
-          if (v < 0.25) {
-            const t = v / 0.25;
-            r = 0; g = Math.round(t * 128); b = 200;
-          } else if (v < 0.5) {
-            const t = (v - 0.25) / 0.25;
-            r = 0; g = Math.round(128 + t * 127); b = Math.round(200 * (1 - t));
-          } else if (v < 0.75) {
-            const t = (v - 0.5) / 0.25;
-            r = Math.round(t * 255); g = 255; b = 0;
-          } else {
-            const t = (v - 0.75) / 0.25;
-            r = 255; g = Math.round(255 * (1 - t)); b = 0;
-          }
-
-          const a255 = Math.round(v * 200);
+          // LUT précalculée pour éviter les branches if/else par cellule
+          const lutIdx = Math.round(v * 255) * 4;
+          const r = this._lut[lutIdx];
+          const g = this._lut[lutIdx + 1];
+          const b = this._lut[lutIdx + 2];
+          const a255 = this._lut[lutIdx + 3];
           // Remplir le rectangle de la cellule dans ImageData
           const x0 = col * HEATMAP_CELL;
           const y0 = row * HEATMAP_CELL;
@@ -384,6 +401,14 @@ export class Simulation {
 
     // Compteur de voisins (rempli chaque frame dans _update)
     this._neighborCount = {};
+
+    // ── Étoiles procédurales (nuit enrichie)
+    this._stars = Array.from({ length: 80 }, () => ({
+      x: Math.random(),
+      y: Math.random(),
+      r: 0.5 + Math.random() * 1.2,
+      a: 0.3 + Math.random() * 0.5
+    }));
   }
 
   resize() {
@@ -617,6 +642,8 @@ export class Simulation {
         if (typeof nextEv.reset === 'function') nextEv.reset();
         this.activeEvent  = nextEv;
         this._eventTimer  = 0;
+        // Logguer l'événement automatique (comme le déclenchement manuel)
+        this.pushEvent(`🌐 ${nextEv.label}`, nextEv.color || '#fff', 'global');
       }
     }
   }
@@ -781,7 +808,10 @@ export class Simulation {
           e.vx -= nx2 * f;
           e.vy -= ny2 * f;
           e.mood = Math.max(-1, e.mood - 0.002 * dt);
-          if (e.state !== STATE.FUITE && e.state !== STATE.SATURE) e.state = STATE.FUITE;
+          if (e.state !== STATE.FUITE && e.state !== STATE.SATURE) {
+            e.state = STATE.FUITE;
+            e._stateTimer = 0; // reset pour laisser la fuite s'exprimer
+          }
           // Spawn emoji conflit (throttlé : aléatoire pour ne pas spammer)
           if (Math.random() < 0.0003 * dt) {
             this._spawnFloatingEmoji(
@@ -867,7 +897,7 @@ export class Simulation {
       if (e.y > H - e.radius) { e.y = H - e.radius; e.vy = -Math.abs(e.vy) * 0.6; }
 
       // Énergie
-      const energyDrain = speed * 0.002 * dt * (1 - this.isNight * 0.8);
+      const energyDrain = speed * 0.002 * dt * (1 - (this.isNight ? 1 : 0) * 0.8);
       e.energy = Math.max(0, e.energy - energyDrain);
       if (this.isNight || speed < 0.3) {
         e.energy = Math.min(100, e.energy + 0.04 * dt);
@@ -1105,6 +1135,32 @@ export class Simulation {
     if (this.isNight) {
       ctx.fillStyle = 'rgba(10,10,40,0.10)';
       ctx.fillRect(0, 0, W, H);
+
+      // ── Étoiles et lune ──────────────────────────────────────────────────
+      const twinkle = 0.8 + Math.sin(performance.now() * 0.001) * 0.2;
+      for (const s of this._stars) {
+        ctx.beginPath();
+        ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(200,220,255,${(s.a * twinkle).toFixed(2)})`;
+        ctx.fill();
+      }
+      // Lune (coin supérieur droit)
+      const moonX = W * 0.87, moonY = H * 0.10;
+      ctx.beginPath();
+      ctx.arc(moonX, moonY, 24, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(210,220,250,0.10)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(210,220,250,0.22)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // Halo doux autour de la lune
+      const moonGrad = ctx.createRadialGradient(moonX, moonY, 10, moonX, moonY, 55);
+      moonGrad.addColorStop(0, 'rgba(200,215,255,0.08)');
+      moonGrad.addColorStop(1, 'rgba(200,215,255,0)');
+      ctx.beginPath();
+      ctx.arc(moonX, moonY, 55, 0, Math.PI * 2);
+      ctx.fillStyle = moonGrad;
+      ctx.fill();
     }
 
     // ── Heatmap (sous les entités) ───────────────────────────────────────

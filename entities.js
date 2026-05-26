@@ -159,11 +159,15 @@ export class Entity {
   }
 
   getAffinityWith(otherId) {
+    let base = 0;
     for (const [a, b, force] of AFFINITES) {
       if ((a === this.id && b === otherId) ||
-          (b === this.id && a === otherId)) return force;
+          (b === this.id && a === otherId)) { base = force; break; }
     }
-    return 0;
+    // Bonus dynamique : max +0.4 après ~50 unités d'interaction accumulées
+    const logScore = this.interactionLog[otherId] || 0;
+    const dynamic = Math.min(0.4, logScore / 50);
+    return Math.min(1, base + dynamic);
   }
 
   // Retourne les top N entités les plus fréquemment côtoyées

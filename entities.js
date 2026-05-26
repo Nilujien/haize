@@ -144,6 +144,9 @@ export class Entity {
 
     // Mémoire des succès : nombre de projets résolus avec participation de cette entité
     this.successCount = 0;
+
+    // Historique d'humeur : ring-buffer de 80 valeurs échantillonnées toutes les ~500ms
+    this.moodHistory = [];
   }
 
   getAffinityWith(otherId) {
@@ -176,6 +179,7 @@ export class Entity {
       socialCharge: this.socialCharge,
       successCount: this.successCount,
       interactionLog: { ...this.interactionLog },
+      moodHistory: [...this.moodHistory],
     };
   }
 
@@ -187,6 +191,7 @@ export class Entity {
     this.socialCharge = snap.socialCharge ?? 0;
     this.successCount = snap.successCount ?? 0;
     this.interactionLog = { ...(snap.interactionLog ?? {}) };
+    this.moodHistory  = [...(snap.moodHistory ?? [])];
   }
 }
 

@@ -285,6 +285,17 @@ export class Simulation {
     // ── Notification temporaire (save/load feedback)
     this._notification   = null; // { text, color, expiresAt }
 
+    // ── Floating emojis (bulles d'état flottantes)
+    this._floatingEmojis = []; // { x, y, vx, vy, text, born, life, size }
+
+    // ── Mood history sampling
+    this._moodSampleTimer = 0;
+    this.MOOD_SAMPLE_INTERVAL = 500; // ms (game time)
+    this.MOOD_HISTORY_MAX = 80;
+
+    // ── Friendship threshold (score minimum pour afficher un lien d'amitié)
+    this.FRIENDSHIP_THRESHOLD = 8;
+
     this._lastTime   = performance.now();
     this._rafId      = null;
 
@@ -321,6 +332,8 @@ export class Simulation {
     this.eventLog        = [];
     this.heatmap.reset();
     this._notification   = null;
+    this._floatingEmojis = [];
+    this._moodSampleTimer = 0;
   }
 
   // ── Clic sur le canvas ─────────────────────────────────────────────────────
@@ -591,6 +604,14 @@ export class Simulation {
           e.vy -= ny2 * f;
           e.mood = Math.max(-1, e.mood - 0.002 * dt);
           if (e.state !== STATE.FUITE && e.state !== STATE.SATURE) e.state = STATE.FUITE;
+          // Spawn emoji conflit (throttlé : aléatoire pour ne pas spammer)
+          if (Math.random() < 0.0003 * dt) {
+            this._spawnFloatingEmoji(
+              (e.x + other.x) / 2,
+              (e.y + other.y) / 2,
+              Math.random() < 0.5 ? '💢' : '⚡'
+            );
+          }
         }
 
         if (dist < this.INTERACTION_RADIUS) {
@@ -664,6 +685,29 @@ export class Simulation {
       // Heatmap : enregistrer la position courante
       this.heatmap.record(e.x, e.y);
     }
+
+    // ── Échantillonnage humeur (mood history) ─────────────────────────────
+    this._moodSampleTimer += dt;
+    if (this._moodSampleTimer >= this.MOOD_SAMPLE_INTERVAL) {
+      this._moodSampleTimer = 0;
+      for (const e of entities) {
+        e.moodHistory.push(e.mood);
+        if (e.moodHistory.length > this.MOOD_HISTORY_MAX) {
+          e.moodHistory.shift();
+        }
+      }
+    }
+
+    // ── Mise à jour emojis flottants ──────────────────────────────────────
+    const now2 = performance.now();
+    this._floatingEmojis = this._floatingEmojis.filter(fe => {
+      return (now2 - fe.born) < fe.life;
+    });
+    for (const fe of this._floatingEmojis) {
+      fe.x += fe.vx * dt * 0.05;
+      fe.y += fe.vy * dt * 0.05;
+      fe.vy -= 0.002 * dt; // montée légère
+    }
   }
 
   // ── Gestion des projets ───────────────────────────────────────────────────
@@ -696,6 +740,8 @@ export class Simulation {
               e.state = STATE.SOCIAL;
               e._stateTimer = 0;
             }
+            // Célébration visuelle
+            this._spawnFloatingEmoji(e.x, e.y, '🌟');
           }
         }
 
@@ -769,6 +815,21 @@ export class Simulation {
     if (newState !== e.state) {
       e.state = newState;
       e._stateTimer = 0;
+
+      // Émettre un emoji flottant sur changement d'état significatif
+      const stateEmojis = {
+        [STATE.SOCIAL]:  '💬',
+        [STATE.REPOS]:   '😴',
+        [STATE.ACTIF]:   '⚡',
+        [STATE.FUITE]:   '💨',
+        [STATE.SATURE]:  '😵',
+        [STATE.PROJET]:  '🔧',
+        [STATE.ERRANCE]: '🌀',
+      };
+      const emoji = stateEmojis[newState];
+      if (emoji) {
+        this._spawnFloatingEmoji(e.x, e.y, emoji);
+      }
     }
   }
 
@@ -843,6 +904,12 @@ export class Simulation {
     for (const e of entities) {
       this._renderEntity(ctx, e);
     }
+
+    // ── Liens d'amitié persistants (interactionLog) ────────────────────────
+    this._renderFriendshipLinks(ctx);
+
+    // ── Emojis flottants ───────────────────────────────────────────────────
+    this._renderFloatingEmojis(ctx);
 
     // Bannière événement
     if (this.activeEvent && this._eventBannerOpacity > 0) {
@@ -953,7 +1020,7 @@ export class Simulation {
   // ── Panneau Inspect (click-to-inspect) ───────────────────────────────────
   _renderInspectPanel(ctx, W, H) {
     const e = this.selectedEntity;
-    const PW = 220, PH = 268;
+    const PW = 220, PH = 330;
     const PAD = 12;
     const margin = 10;
 
@@ -1067,6 +1134,60 @@ export class Simulation {
     ctx.stroke();
     ctx.setLineDash([]);
 
+    // ── Sparkline humeur ──────────────────────────────────────────────────
+    if (e.moodHistory.length > 4) {
+      const spH  = 28;
+      const spW  = PW - PAD * 2 - 20;
+      const spX  = px + PAD + 10;
+      const spY  = ty + 10;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText('HUMEUR (historique)', spX, spY);
+
+      const chartY = spY + 13;
+
+      // Fond
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fillRect(spX, chartY, spW, spH);
+
+      // Ligne centrale
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(spX, chartY + spH / 2);
+      ctx.lineTo(spX + spW, chartY + spH / 2);
+      ctx.stroke();
+
+      // Sparkline
+      const hist = e.moodHistory;
+      const step = spW / (hist.length - 1);
+
+      ctx.beginPath();
+      for (let i = 0; i < hist.length; i++) {
+        const sx = spX + i * step;
+        const sy = chartY + (1 - (hist[i] + 1) / 2) * spH;
+        if (i === 0) ctx.moveTo(sx, sy);
+        else         ctx.lineTo(sx, sy);
+      }
+      // Couleur selon humeur actuelle
+      const sparkColor = e.mood >= 0 ? '#2ecc71' : '#e74c3c';
+      ctx.strokeStyle = sparkColor;
+      ctx.lineWidth   = 1.5;
+      ctx.lineJoin    = 'round';
+      ctx.stroke();
+
+      // Point courant
+      const lastX = spX + (hist.length - 1) * step;
+      const lastY = chartY + (1 - (hist[hist.length - 1] + 1) / 2) * spH;
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = sparkColor;
+      ctx.fill();
+    }
+
     ctx.restore();
   }
 
@@ -1076,6 +1197,100 @@ export class Simulation {
     ctx.fillRect(x, y, w, h);
     ctx.fillStyle = color;
     ctx.fillRect(x, y, w * Math.max(0, Math.min(1, pct)), h);
+  }
+
+  // ── Liens d'amitié persistants ────────────────────────────────────────────
+  _renderFriendshipLinks(ctx) {
+    const entities = this.entities;
+    const now = performance.now();
+    const pulse = 0.5 + Math.sin(now * 0.0015) * 0.3;
+
+    // Pour chaque paire, vérifier si le score d'interaction est assez élevé
+    for (let i = 0; i < entities.length; i++) {
+      const a = entities[i];
+      for (let j = i + 1; j < entities.length; j++) {
+        const b = entities[j];
+        const scoreA = a.interactionLog[b.id] || 0;
+        const scoreB = b.interactionLog[a.id] || 0;
+        const score  = (scoreA + scoreB) / 2;
+
+        if (score < this.FRIENDSHIP_THRESHOLD) continue;
+
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Seulement si pas déjà trop proches (éviter le doublon avec la ligne de proximité)
+        if (dist < this.INTERACTION_RADIUS) continue;
+        if (dist > 700) continue;
+
+        const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
+        const alpha = strength * pulse * 0.35;
+
+        // Couleur intermédiaire entre les deux entités
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+
+        // Courbe de Bezier légèrement courbée pour un rendu organique
+        const mx = (a.x + b.x) / 2 + (Math.random() - 0.5) * 0; // statique, sinon trop agité
+        const my = (a.x + b.x) / 2; // on garde droit
+        ctx.lineTo(b.x, b.y);
+
+        ctx.strokeStyle = `rgba(255,200,100,${alpha.toFixed(3)})`;
+        ctx.lineWidth   = 0.8 + strength * 1.5;
+        ctx.setLineDash([4, 8]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Petit cœur au milieu si score très élevé
+        if (score > 40) {
+          const midX = (a.x + b.x) / 2;
+          const midY = (a.y + b.y) / 2;
+          ctx.font = '10px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.globalAlpha = alpha * 2;
+          ctx.fillText('💛', midX, midY);
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
+  }
+
+  // ── Rendu des emojis flottants ─────────────────────────────────────────────
+  _renderFloatingEmojis(ctx) {
+    if (this._floatingEmojis.length === 0) return;
+    const now = performance.now();
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (const fe of this._floatingEmojis) {
+      const age  = now - fe.born;
+      const t    = age / fe.life;
+      // Apparaît vite, disparaît doucement
+      const alpha = t < 0.15 ? t / 0.15 : Math.max(0, 1 - (t - 0.15) / 0.85);
+      ctx.globalAlpha = alpha;
+      ctx.font = `${fe.size}px monospace`;
+      ctx.fillText(fe.text, fe.x, fe.y);
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ── Spawn d'un emoji flottant ─────────────────────────────────────────────
+  _spawnFloatingEmoji(x, y, text) {
+    this._floatingEmojis.push({
+      x,
+      y: y - 20,
+      vx: (Math.random() - 0.5) * 0.8,
+      vy: 1.2 + Math.random() * 0.8,
+      text,
+      born: performance.now(),
+      life: 1800 + Math.random() * 600,
+      size: 14 + Math.floor(Math.random() * 4),
+    });
   }
 
   _renderEntity(ctx, e) {

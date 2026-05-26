@@ -209,7 +209,25 @@ canvas {
 #legend::-webkit-scrollbar-track { background: transparent; }
 #legend::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
 
-/* ── Tag événement global dans le panel ─────────────────────────*/
+.ctrl-sep {
+  width: 1px;
+  height: 20px;
+  background: rgba(255,255,255,0.12);
+}
+
+.ctrl-btn--accent {
+  color: #2ecc71;
+  border-color: rgba(46,204,113,0.3);
+}
+.ctrl-btn--accent:hover { background: rgba(46,204,113,0.15); }
+
+.ctrl-btn--dim {
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+.ctrl-btn--dim:hover { opacity: 1 !important; background: rgba(255,255,255,0.10); }
+
+.state-sature { background: rgba(255,118,117,0.25); color: #ff7675; }
 .event-tag {
   font-size: 10px;
   font-family: monospace;

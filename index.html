@@ -32,6 +32,10 @@
     <input type="range" id="speed-slider" min="0.2" max="4" step="0.1" value="1" />
     <span id="speed-val" class="ctrl-label">×1.0</span>
     <button class="ctrl-btn" id="btn-reset">↺ Reset</button>
+    <span class="ctrl-sep"></span>
+    <button class="ctrl-btn ctrl-btn--accent" id="btn-save">💾 Save</button>
+    <button class="ctrl-btn" id="btn-load">📂 Load</button>
+    <button class="ctrl-btn ctrl-btn--dim" id="btn-heatmap" title="Touche H">🌡️</button>
   </div>
 
   <script type="module">
@@ -120,6 +124,21 @@
 
     btnReset.addEventListener('click', () => {
       sim.reset();
+    });
+
+    // ── Save / Load ─────────────────────────────────────────────────────
+    document.getElementById('btn-save').addEventListener('click', () => sim.save());
+    document.getElementById('btn-load').addEventListener('click', () => sim.load());
+
+    // ── Heatmap toggle (bouton + touche H) ──────────────────────────────
+    const btnHeatmap = document.getElementById('btn-heatmap');
+    function toggleHeatmap() {
+      sim.toggleHeatmap();
+      btnHeatmap.style.opacity = sim.showHeatmap ? '1' : '0.5';
+    }
+    btnHeatmap.addEventListener('click', toggleHeatmap);
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'h' || e.key === 'H') toggleHeatmap();
     });
   </script>
 </body>

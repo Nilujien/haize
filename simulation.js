@@ -2,10 +2,11 @@
  * simulation.js
  * Boucle principale, physique, interactions, rendu Canvas.
  *
- * Nouveautés v2 :
- *  - Mémoire des interactions (interactionLog par entité)
- *  - Click-to-inspect : panneau détaillé en cliquant sur une entité
- *  - Événements aléatoires globaux : Tempête, Fête, Tension, Déprime
+ * Nouveautés v3 :
+ *  - Heatmap de présence (touche H pour basculer)
+ *  - Fatigue sociale / état SATURE pour les introvertis
+ *  - Sauvegarde / Chargement état JSON (localStorage)
+ *  - Bouton Save/Load dans les contrôles
  */
 
 import { Entity, ENTITY_DEFS, AFFINITES, STATE, Project } from './entities.js';
@@ -64,7 +65,6 @@ const GLOBAL_EVENTS = [
     description: 'Chaos général — forces aléatoires violentes',
     apply(entities, dt) {
       for (const e of entities) {
-        // Turbulence élevée
         e.vx += (Math.random() - 0.5) * 0.8;
         e.vy += (Math.random() - 0.5) * 0.8;
         e.mood = Math.max(-1, e.mood - 0.0015 * dt);
@@ -83,7 +83,6 @@ const GLOBAL_EVENTS = [
       for (const e of entities) {
         const dx = cx - e.x, dy = cy - e.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        // Attraction vers le centre, proportionnelle à la socialité
         const pull = e.character.socialite * 0.04;
         e.vx += (dx / dist) * pull;
         e.vy += (dy / dist) * pull;
@@ -116,7 +115,6 @@ const GLOBAL_EVENTS = [
     description: 'Apathie générale — tout le monde ralentit et se retire',
     apply(entities, dt) {
       for (const e of entities) {
-        // Tout le monde se ralentit et perd de l'humeur
         e.vx *= 0.97;
         e.vy *= 0.97;
         e.mood = Math.max(-1, e.mood - 0.0008 * dt);
@@ -125,6 +123,119 @@ const GLOBAL_EVENTS = [
     },
   },
 ];
+
+// ─── Heatmap ──────────────────────────────────────────────────────────────────
+const HEATMAP_CELL = 20; // taille d'une cellule en px
+
+class Heatmap {
+  constructor() {
+    this.cols = 0;
+    this.rows = 0;
+    this.data = null;
+    this._offscreenCanvas = null;
+    this._offscreenCtx    = null;
+    this._dirty           = true;
+    this._decayTimer      = 0;
+    this.DECAY_INTERVAL   = 5000; // ms entre chaque décrément global
+    this.DECAY_AMOUNT     = 0.5;
+  }
+
+  resize(W, H) {
+    this.cols = Math.ceil(W / HEATMAP_CELL);
+    this.rows = Math.ceil(H / HEATMAP_CELL);
+    this.data = new Float32Array(this.cols * this.rows);
+    this._offscreenCanvas = new OffscreenCanvas(W, H);
+    this._offscreenCtx    = this._offscreenCanvas.getContext('2d');
+    this._dirty = true;
+  }
+
+  record(x, y) {
+    const col = Math.floor(x / HEATMAP_CELL);
+    const row = Math.floor(y / HEATMAP_CELL);
+    if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return;
+    const idx = row * this.cols + col;
+    this.data[idx] = Math.min(255, this.data[idx] + 0.12);
+    this._dirty = true;
+  }
+
+  decay(dt) {
+    this._decayTimer += dt;
+    if (this._decayTimer < this.DECAY_INTERVAL) return;
+    this._decayTimer = 0;
+    for (let i = 0; i < this.data.length; i++) {
+      if (this.data[i] > 0) {
+        this.data[i] = Math.max(0, this.data[i] - this.DECAY_AMOUNT);
+        this._dirty = true;
+      }
+    }
+  }
+
+  // Rendu via ImageData pour performance
+  render(ctx, W, H, alpha = 0.55) {
+    if (!this.data) return;
+
+    // Trouver le max pour normalisation
+    let maxVal = 1;
+    for (let i = 0; i < this.data.length; i++) {
+      if (this.data[i] > maxVal) maxVal = this.data[i];
+    }
+
+    // Dessiner cellule par cellule avec interpolation de couleur
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    for (let row = 0; row < this.rows; row++) {
+      for (let col = 0; col < this.cols; col++) {
+        const v = this.data[row * this.cols + col] / maxVal;
+        if (v < 0.01) continue;
+
+        // Gradient froid → chaud : bleu → cyan → vert → jaune → rouge
+        let r, g, b;
+        if (v < 0.25) {
+          const t = v / 0.25;
+          r = 0; g = Math.round(t * 128); b = 200;
+        } else if (v < 0.5) {
+          const t = (v - 0.25) / 0.25;
+          r = 0; g = Math.round(128 + t * 127); b = Math.round(200 * (1 - t));
+        } else if (v < 0.75) {
+          const t = (v - 0.5) / 0.25;
+          r = Math.round(t * 255); g = 255; b = 0;
+        } else {
+          const t = (v - 0.75) / 0.25;
+          r = 255; g = Math.round(255 * (1 - t)); b = 0;
+        }
+
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(
+          col * HEATMAP_CELL, row * HEATMAP_CELL,
+          HEATMAP_CELL, HEATMAP_CELL
+        );
+      }
+    }
+
+    ctx.restore();
+  }
+
+  reset() {
+    if (this.data) this.data.fill(0);
+    this._dirty = true;
+  }
+
+  // Sérialisation compacte
+  toSnapshot() {
+    return { cols: this.cols, rows: this.rows, data: Array.from(this.data) };
+  }
+
+  fromSnapshot(snap, W, H) {
+    if (!snap) return;
+    this.resize(W, H);
+    const len = Math.min(snap.data.length, this.data.length);
+    for (let i = 0; i < len; i++) this.data[i] = snap.data[i];
+  }
+}
+
+// ─── Persistance (localStorage) ───────────────────────────────────────────────
+const SAVE_KEY = 'haize_save_v1';
 
 // ─── Simulation ───────────────────────────────────────────────────────────────
 export class Simulation {
@@ -155,16 +266,24 @@ export class Simulation {
     // ── Entité sélectionnée (click-to-inspect)
     this.selectedEntity  = null;
 
-    // ── Historique d'événements flottant (event log)
-    // Chaque entrée : { text, color, timestamp }
+    // ── Historique d'événements flottant
     this.eventLog        = [];
-    this.EVENT_LOG_MAX   = 5;   // max lignes affichées simultanément
+    this.EVENT_LOG_MAX   = 5;
 
     // ── Événement global actif
     this.activeEvent     = null;
     this._eventTimer     = 0;
-    this._nextEventIn    = 20000 + Math.random() * 20000; // premier dans 20-40s
-    this._eventBannerOpacity = 0; // pour fondu entrée/sortie
+    this._nextEventIn    = 20000 + Math.random() * 20000;
+    this._eventBannerOpacity = 0;
+
+    // ── Heatmap
+    this.heatmap         = new Heatmap();
+    this.showHeatmap     = false;
+    this._heatmapOpacity = 0; // pour fondu entrée/sortie
+    this.heatmap.resize(canvas.width, canvas.height);
+
+    // ── Notification temporaire (save/load feedback)
+    this._notification   = null; // { text, color, expiresAt }
 
     this._lastTime   = performance.now();
     this._rafId      = null;
@@ -176,11 +295,15 @@ export class Simulation {
     this.NOISE_SCALE          = 0.0025;
     this.NOISE_SPEED          = 0.0008;
     this._noiseTime           = 0;
+
+    // Compteur de voisins (rempli chaque frame dans _update)
+    this._neighborCount = {};
   }
 
   resize() {
     this.canvas.width  = window.innerWidth;
     this.canvas.height = window.innerHeight;
+    this.heatmap.resize(this.canvas.width, this.canvas.height);
   }
 
   reset() {
@@ -196,6 +319,8 @@ export class Simulation {
     this._nextEventIn    = 20000 + Math.random() * 20000;
     this.selectedEntity  = null;
     this.eventLog        = [];
+    this.heatmap.reset();
+    this._notification   = null;
   }
 
   // ── Clic sur le canvas ─────────────────────────────────────────────────────
@@ -211,8 +336,74 @@ export class Simulation {
         hit = e;
       }
     }
-    // Toggle : déselectionner si on reclique la même
     this.selectedEntity = (hit === this.selectedEntity) ? null : hit;
+  }
+
+  // ── Toggle heatmap ─────────────────────────────────────────────────────────
+  toggleHeatmap() {
+    this.showHeatmap = !this.showHeatmap;
+  }
+
+  // ── Sauvegarde ─────────────────────────────────────────────────────────────
+  save() {
+    try {
+      const snapshot = {
+        version: 1,
+        savedAt: Date.now(),
+        cycleElapsed: (performance.now() - this.cycleStart) % this.dayDuration,
+        isNight: this.isNight,
+        entities: this.entities.map(e => e.toSnapshot()),
+        heatmap: this.heatmap.toSnapshot(),
+        successCounts: Object.fromEntries(
+          this.entities.map(e => [e.id, e.successCount])
+        ),
+      };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
+      this._showNotification('💾 Sauvegarde OK', '#2ecc71');
+    } catch (err) {
+      this._showNotification('❌ Erreur save', '#e74c3c');
+      console.error('[HAIZE] save error', err);
+    }
+  }
+
+  // ── Chargement ─────────────────────────────────────────────────────────────
+  load() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) {
+        this._showNotification('⚠️ Aucune sauvegarde', '#f39c12');
+        return;
+      }
+      const snap = JSON.parse(raw);
+      if (snap.version !== 1) {
+        this._showNotification('⚠️ Format incompatible', '#f39c12');
+        return;
+      }
+
+      // Restaurer les entités
+      for (const e of this.entities) {
+        const eSnap = snap.entities?.find(s => s.id === e.id);
+        e.fromSnapshot(eSnap);
+      }
+
+      // Restaurer la heatmap
+      this.heatmap.fromSnapshot(snap.heatmap, this.canvas.width, this.canvas.height);
+
+      // Cycle
+      if (snap.isNight !== undefined) this.isNight = snap.isNight;
+      this.cycleStart = performance.now() - (snap.cycleElapsed ?? 0);
+
+      const d = new Date(snap.savedAt);
+      const label = `${d.getHours()}h${String(d.getMinutes()).padStart(2,'0')}`;
+      this._showNotification(`📂 Chargé (${label})`, '#3498db');
+    } catch (err) {
+      this._showNotification('❌ Erreur load', '#e74c3c');
+      console.error('[HAIZE] load error', err);
+    }
+  }
+
+  _showNotification(text, color) {
+    this._notification = { text, color, expiresAt: performance.now() + 3000 };
   }
 
   // ── Boucle principale ──────────────────────────────────────────────────────
@@ -248,7 +439,6 @@ export class Simulation {
   _updateGlobalEvents(dt) {
     if (this.activeEvent) {
       this._eventTimer += dt;
-      // Fondu entrant (1s) et sortant (1s)
       const t = this._eventTimer / this.activeEvent.duration;
       if (t < 0.08) {
         this._eventBannerOpacity = t / 0.08;
@@ -258,10 +448,8 @@ export class Simulation {
         this._eventBannerOpacity = 1;
       }
 
-      // Appliquer les effets
       this.activeEvent.apply(this.entities, dt, this.canvas.width, this.canvas.height);
 
-      // Fin de l'événement
       if (this._eventTimer >= this.activeEvent.duration) {
         this.activeEvent    = null;
         this._eventTimer    = 0;
@@ -271,7 +459,6 @@ export class Simulation {
     } else {
       this._eventTimer += dt;
       if (this._eventTimer >= this._nextEventIn) {
-        // Déclencher un événement aléatoire
         this.activeEvent  = GLOBAL_EVENTS[Math.floor(Math.random() * GLOBAL_EVENTS.length)];
         this._eventTimer  = 0;
       }
@@ -286,8 +473,33 @@ export class Simulation {
     this._noiseTime += dt * this.NOISE_SPEED;
 
     this._updateProjects(dt);
+    this.heatmap.decay(dt);
+
+    // Compter les voisins proches pour la fatigue sociale
+    this._neighborCount = {};
+    for (const e of entities) this._neighborCount[e.id] = 0;
+    for (let i = 0; i < entities.length; i++) {
+      for (let j = i + 1; j < entities.length; j++) {
+        const a = entities[i], b = entities[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < this.INTERACTION_RADIUS * 0.6) {
+          this._neighborCount[a.id]++;
+          this._neighborCount[b.id]++;
+        }
+      }
+    }
 
     for (const e of entities) {
+      // ── Fatigue sociale ──────────────────────────────────────────────────
+      const neighbors = this._neighborCount[e.id] || 0;
+      const introFactor = 1 - e.character.socialite; // 0=extraverti, 1=introverti
+      const chargeGain = neighbors * 0.004 * dt * (0.3 + introFactor * 0.7);
+      const chargeLoss = (neighbors === 0 ? 0.012 : 0.001) * dt;
+      e.socialCharge = Math.max(0, Math.min(100,
+        e.socialCharge + chargeGain - chargeLoss
+      ));
+
       // Bruit de Perlin
       const nx = PERLIN.noise(
         e._noiseOffsetX + e.x * this.NOISE_SCALE,
@@ -311,15 +523,37 @@ export class Simulation {
         e.vx += (cdx / cdist) * flee;
         e.vy += (cdy / cdist) * flee;
         e.mood = Math.max(-1, e.mood - 0.001 * dt);
-        if (e.state !== STATE.PROJET) {
+        if (e.state !== STATE.PROJET && e.state !== STATE.SATURE) {
           e.state = STATE.FUITE;
           e._stateTimer = 0;
         }
       }
 
+      // ── Fuite sociale (entité saturée) ────────────────────────────────
+      if (e.state === STATE.SATURE) {
+        // Fuir vers le bord ou les zones peu peuplées
+        // Force centrifuge depuis la zone dense
+        let fx = 0, fy = 0;
+        for (const other of entities) {
+          if (other === e) continue;
+          const dx = e.x - other.x, dy = e.y - other.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          if (d < this.INTERACTION_RADIUS) {
+            const push = (1 - d / this.INTERACTION_RADIUS) * 0.08;
+            fx += (dx / d) * push;
+            fy += (dy / d) * push;
+          }
+        }
+        e.vx += fx;
+        e.vy += fy;
+      }
+
       // Attraction vers les projets
       for (const proj of this.projects) {
         if (proj.resolved || proj.isExpired) continue;
+        // Les entités saturées ignorent les projets sociaux
+        if (e.state === STATE.SATURE && proj.affinity === 'socialite') continue;
+
         const pdx  = proj.x - e.x;
         const pdy  = proj.y - e.y;
         const pdist = Math.sqrt(pdx * pdx + pdy * pdy) || 1;
@@ -356,7 +590,7 @@ export class Simulation {
           e.vx -= nx2 * f;
           e.vy -= ny2 * f;
           e.mood = Math.max(-1, e.mood - 0.002 * dt);
-          if (e.state !== STATE.FUITE) e.state = STATE.FUITE;
+          if (e.state !== STATE.FUITE && e.state !== STATE.SATURE) e.state = STATE.FUITE;
         }
 
         if (dist < this.INTERACTION_RADIUS) {
@@ -365,20 +599,20 @@ export class Simulation {
           const affinity = e.getAffinityWith(other.id);
           const socialForce = (e.character.socialite + other.character.socialite) / 2;
           const attractBase = socialForce - 0.3;
-          const force = (attractBase + affinity * 0.5) * t * 0.015;
+
+          // Les saturés repoussent les autres (réduction de l'attraction)
+          const saturationPenalty = e.state === STATE.SATURE ? -0.5 : 0;
+          const force = (attractBase + affinity * 0.5 + saturationPenalty) * t * 0.015;
 
           e.vx += nx2 * force;
           e.vy += ny2 * force;
 
-          // Influence humeur
           if (dist < this.INTERACTION_RADIUS * 0.5) {
             const moodDelta = other.mood * 0.0003 * dt;
             e.mood = Math.max(-1, Math.min(1, e.mood + moodDelta));
-            if (e.character.socialite > 0.6) {
+            if (e.character.socialite > 0.6 && e.state !== STATE.SATURE) {
               e.energy = Math.min(100, e.energy + 0.003 * dt);
             }
-
-            // ── Mémorisation : incrémenter le score de contact avec other ──
             e.interactionLog[other.id] = (e.interactionLog[other.id] || 0) + dt * 0.001;
           }
         }
@@ -426,6 +660,9 @@ export class Simulation {
 
       // État
       this._updateState(e, dt);
+
+      // Heatmap : enregistrer la position courante
+      this.heatmap.record(e.x, e.y);
     }
   }
 
@@ -448,14 +685,12 @@ export class Simulation {
         proj.resolved   = true;
         proj.resolvedAt = performance.now();
 
-        // Construire la liste des participants pour le log
         const participantIds = [...proj.participants].join(', ');
 
         for (const e of this.entities) {
           if (proj.participants.has(e.id)) {
             e.mood   = Math.min(1, e.mood + proj.moodReward);
             e.energy = Math.min(100, e.energy + proj.energyReward);
-            // ── Incrémenter le compteur de succès de l'entité ──
             e.successCount = (e.successCount || 0) + 1;
             if (e.state === STATE.PROJET) {
               e.state = STATE.SOCIAL;
@@ -464,7 +699,6 @@ export class Simulation {
           }
         }
 
-        // ── Ajouter une entrée dans l'event log ──
         const entry = {
           text:      `${proj.label} résolu ! (${participantIds || '—'})`,
           color:     proj.color,
@@ -493,6 +727,7 @@ export class Simulation {
 
     let newState = e.state;
 
+    // Vérifier si entité reste sur un projet actif
     if (e.state === STATE.PROJET) {
       const nearProject = this.projects.some(p =>
         !p.resolved && !p.isExpired &&
@@ -501,7 +736,25 @@ export class Simulation {
       if (nearProject) return;
     }
 
-    if (e.energy < 20) {
+    // ── Fatigue sociale : prioritaire sur les introvertis ─────────────────
+    const threshold = e.socialSaturationThreshold;
+    if (e.socialCharge > threshold && e.state !== STATE.PROJET) {
+      // L'entité se sature → fuit les foules
+      if (e.state !== STATE.SATURE) {
+        e.state = STATE.SATURE;
+        e._stateTimer = 0;
+        // Légère perte d'humeur
+        e.mood = Math.max(-1, e.mood - 0.15);
+      }
+      return;
+    }
+
+    // Récupération de saturation : redescendre en dessous de 60% du seuil
+    if (e.state === STATE.SATURE && e.socialCharge < threshold * 0.6) {
+      newState = STATE.ERRANCE;
+    } else if (e.state === STATE.SATURE) {
+      return; // Rester saturé jusqu'à récupération
+    } else if (e.energy < 20) {
       newState = STATE.REPOS;
     } else if (e.state === STATE.FUITE && e._stateTimer > 2000) {
       newState = STATE.ERRANCE;
@@ -533,6 +786,18 @@ export class Simulation {
       ctx.fillRect(0, 0, W, H);
     }
 
+    // ── Heatmap (sous les entités) ───────────────────────────────────────
+    if (this.showHeatmap) {
+      // Fondu d'entrée / sortie
+      this._heatmapOpacity = Math.min(1, this._heatmapOpacity + 0.04);
+      this.heatmap.render(ctx, W, H, this._heatmapOpacity * 0.50);
+    } else {
+      this._heatmapOpacity = Math.max(0, this._heatmapOpacity - 0.04);
+      if (this._heatmapOpacity > 0) {
+        this.heatmap.render(ctx, W, H, this._heatmapOpacity * 0.50);
+      }
+    }
+
     // Overlay événement global
     if (this.activeEvent && this._eventBannerOpacity > 0) {
       this._renderEventOverlay(ctx, W, H);
@@ -550,7 +815,6 @@ export class Simulation {
           const affinity = a.getAffinityWith(b.id);
           const lineAlpha = alpha + affinity * 0.2;
 
-          // Mise en évidence si l'une des deux est sélectionnée
           const isSelected = (a === this.selectedEntity || b === this.selectedEntity);
 
           ctx.beginPath();
@@ -590,22 +854,71 @@ export class Simulation {
       this._renderInspectPanel(ctx, W, H);
     }
 
-    // ── Indicateur de zone de fuite curseur ──
+    // Curseur
     if (this.mouseX > 0 && this.mouseX < W && this.mouseY > 0 && this.mouseY < H) {
       this._renderCursorZone(ctx);
     }
 
-    // ── Event log flottant (bas-centre, juste au-dessus des contrôles) ──
+    // Event log flottant
     if (this.eventLog.length > 0) {
       this._renderEventLog(ctx, W, H);
     }
+
+    // ── Notification (save/load feedback) ─────────────────────────────────
+    if (this._notification) {
+      this._renderNotification(ctx, W);
+    }
+
+    // ── Label heatmap ─────────────────────────────────────────────────────
+    if (this._heatmapOpacity > 0.05) {
+      ctx.save();
+      ctx.globalAlpha = this._heatmapOpacity;
+      ctx.font = 'bold 11px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText('🌡️ HEATMAP', W - 260, 20);
+      ctx.restore();
+    }
+  }
+
+  // ── Notification temporaire ───────────────────────────────────────────────
+  _renderNotification(ctx, W) {
+    const notif = this._notification;
+    const now   = performance.now();
+    if (now >= notif.expiresAt) { this._notification = null; return; }
+
+    const remaining = notif.expiresAt - now;
+    const alpha = Math.min(1, remaining / 400);
+
+    const PW = 240, PH = 36;
+    const px = (W - PW) / 2;
+    const py = 52; // sous la bannière éventuelle
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    ctx.fillStyle = 'rgba(5,8,20,0.90)';
+    ctx.strokeStyle = notif.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(px, py, PW, PH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = notif.color;
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(notif.text, px + PW / 2, py + PH / 2);
+
+    ctx.restore();
   }
 
   // ── Overlay fond de l'événement ───────────────────────────────────────────
   _renderEventOverlay(ctx, W, H) {
     const ev = this.activeEvent;
     const alpha = this._eventBannerOpacity * 0.06;
-    // Parse la couleur hex en composantes
     const r = parseInt(ev.color.slice(1,3),16);
     const g = parseInt(ev.color.slice(3,5),16);
     const b = parseInt(ev.color.slice(5,7),16);
@@ -617,20 +930,17 @@ export class Simulation {
   _renderEventBanner(ctx, W) {
     const ev = this.activeEvent;
     const alpha = this._eventBannerOpacity;
-    const progress = this._eventTimer / ev.duration; // 0→1
+    const progress = this._eventTimer / ev.duration;
 
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    // Fond de la bannière
     ctx.fillStyle = ev.color + 'cc';
     ctx.fillRect(0, 0, W, 42);
 
-    // Barre de progression (durée restante)
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
     ctx.fillRect(0, 38, W * (1 - progress), 4);
 
-    // Texte
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
@@ -643,20 +953,17 @@ export class Simulation {
   // ── Panneau Inspect (click-to-inspect) ───────────────────────────────────
   _renderInspectPanel(ctx, W, H) {
     const e = this.selectedEntity;
-    const PW = 220, PH = 240;
+    const PW = 220, PH = 268;
     const PAD = 12;
     const margin = 10;
 
-    // Position : coin bas-droit par défaut, mais on évite de couvrir l'entité
     let px = W - PW - margin;
     let py = H - PH - margin;
 
-    // Si l'entité est dans le coin bas-droit, basculer à gauche
     if (e.x > W * 0.6 && e.y > H * 0.6) px = margin;
 
     ctx.save();
 
-    // Fond du panneau
     ctx.fillStyle = 'rgba(10,12,25,0.92)';
     ctx.strokeStyle = e.color;
     ctx.lineWidth = 2;
@@ -665,14 +972,12 @@ export class Simulation {
     ctx.fill();
     ctx.stroke();
 
-    // Ligne décorative de couleur
     ctx.fillStyle = e.color;
     ctx.fillRect(px + PAD, py + 8, 3, PH - 16);
 
     ctx.fillStyle = '#ffffff';
     ctx.textBaseline = 'top';
 
-    // ID + état
     ctx.font = 'bold 18px monospace';
     ctx.fillStyle = e.color;
     ctx.fillText(e.id, px + PAD + 10, py + PAD);
@@ -680,6 +985,7 @@ export class Simulation {
     const stateColors = {
       ACTIF: '#f1c40f', REPOS: '#95a5a6', SOCIAL: '#2ecc71',
       FUITE: '#e74c3c', ERRANCE: '#9b59b6', PROJET: '#00cec9',
+      SATURE: '#ff7675',
     };
     ctx.font = '11px monospace';
     ctx.fillStyle = stateColors[e.state] || '#fff';
@@ -696,10 +1002,16 @@ export class Simulation {
     this._drawBar(ctx, px + PAD + 70, py + 71, 120, 8,
       e.energy / 100, '#f1c40f');
 
+    // Charge sociale
+    ctx.fillText('CHARGE SOC.', px + PAD + 10, py + 84);
+    const chargeColor = e.socialCharge > e.socialSaturationThreshold ? '#ff7675' : '#74b9ff';
+    this._drawBar(ctx, px + PAD + 70, py + 85, 120, 8,
+      e.socialCharge / 100, chargeColor);
+
     // Caractère
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = 'bold 10px monospace';
-    ctx.fillText('CARACTÈRE', px + PAD + 10, py + 92);
+    ctx.fillText('CARACTÈRE', px + PAD + 10, py + 102);
 
     const traits = [
       ['Extr.', e.character.extraversion],
@@ -707,7 +1019,7 @@ export class Simulation {
       ['Cur.', e.character.curiosite],
       ['Soc.', e.character.socialite],
     ];
-    let ty = py + 106;
+    let ty = py + 116;
     for (const [label, val] of traits) {
       ctx.fillStyle = 'rgba(255,255,255,0.5)';
       ctx.font = '10px monospace';
@@ -716,7 +1028,7 @@ export class Simulation {
       ty += 14;
     }
 
-    // Top contacts (mémoire des interactions)
+    // Top contacts
     const contacts = e.getTopContacts(3);
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = 'bold 10px monospace';
@@ -735,7 +1047,6 @@ export class Simulation {
         ctx.font = 'bold 11px monospace';
         ctx.fillText(id, px + PAD + 10, ty);
 
-        // Mini-barre de score (normalisée sur max 50)
         this._drawBar(ctx, px + PAD + 40, ty + 1, 110, 7,
           Math.min(1, score / 30), col);
 
@@ -746,7 +1057,7 @@ export class Simulation {
       }
     }
 
-    // Petit cercle pointant vers l'entité
+    // Ligne pointée vers l'entité
     ctx.strokeStyle = e.color + '88';
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
@@ -770,8 +1081,22 @@ export class Simulation {
   _renderEntity(ctx, e) {
     const r = e.radius;
     const isSelected = (e === this.selectedEntity);
+    const isSaturated = (e.state === STATE.SATURE);
 
-    // Halo de sélection
+    // Halo saturation sociale (aura violacée-rouge pour les saturés)
+    if (isSaturated) {
+      const satPct = Math.min(1, e.socialCharge / 100);
+      const satAlpha = satPct * 0.5;
+      const haloR = r * (2.2 + Math.sin(performance.now() * 0.003) * 0.3);
+      const grad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, haloR);
+      grad.addColorStop(0, `rgba(255,118,117,${satAlpha.toFixed(2)})`);
+      grad.addColorStop(1, 'transparent');
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
     if (isSelected) {
       ctx.beginPath();
       ctx.arc(e.x, e.y, r + 12, 0, Math.PI * 2);
@@ -816,8 +1141,8 @@ export class Simulation {
     ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
     ctx.fillStyle   = e.color + 'cc';
     ctx.fill();
-    ctx.strokeStyle = e.color;
-    ctx.lineWidth   = 2;
+    ctx.strokeStyle = isSaturated ? '#ff7675' : e.color;
+    ctx.lineWidth   = isSaturated ? 2.5 : 2;
     ctx.stroke();
 
     // Arc énergie
@@ -827,6 +1152,17 @@ export class Simulation {
     ctx.strokeStyle = `rgba(255,255,255,0.5)`;
     ctx.lineWidth   = 2;
     ctx.stroke();
+
+    // Arc charge sociale (rouge quand haute, discret)
+    if (e.socialCharge > 20) {
+      const chargeAngle = (e.socialCharge / 100) * Math.PI * 2 - Math.PI / 2;
+      const chargeAlpha = Math.min(0.8, e.socialCharge / 100);
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, r + 9, -Math.PI / 2, chargeAngle);
+      ctx.strokeStyle = `rgba(255,118,117,${chargeAlpha.toFixed(2)})`;
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+    }
 
     // Initiales
     ctx.fillStyle   = '#ffffff';
@@ -843,42 +1179,36 @@ export class Simulation {
       [STATE.FUITE]:   '#e74c3c',
       [STATE.ERRANCE]: '#9b59b6',
       [STATE.PROJET]:  '#00cec9',
+      [STATE.SATURE]:  '#ff7675',
     };
     ctx.beginPath();
     ctx.arc(e.x + r * 0.65, e.y - r * 0.65, 4, 0, Math.PI * 2);
     ctx.fillStyle = stateColors[e.state] || '#ffffff';
     ctx.fill();
 
-    // ── Badge de succès (★N) — affiché si au moins 1 succès ──
+    // Badge de succès
     if (e.successCount > 0) {
       const badgeX = e.x - r * 0.55;
       const badgeY = e.y - r - 10;
       ctx.font      = 'bold 10px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      // Ombre légère pour lisibilité
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
       ctx.fillText(`★${e.successCount}`, badgeX + 1, badgeY + 1);
       ctx.fillStyle = '#f9ca24';
       ctx.fillText(`★${e.successCount}`, badgeX, badgeY);
     }
-
-    // Curseur pointer (hint de cliquabilité)
-    // Géré côté HTML via cursor CSS — rien à faire ici
   }
 
-  // ── Indicateur visuel de la zone de fuite curseur ────────────────────────
   _renderCursorZone(ctx) {
     const x = this.mouseX, y = this.mouseY;
     const r = this.CURSOR_RADIUS;
     const now = performance.now();
 
-    // Cercle pointillé animé (rotation lente)
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(now * 0.0005);
 
-    // Cercle extérieur pointillé
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(231,76,60,0.35)';
@@ -887,7 +1217,6 @@ export class Simulation {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Halo gradient doux
     const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
     grad.addColorStop(0,   'rgba(231,76,60,0.08)');
     grad.addColorStop(0.6, 'rgba(231,76,60,0.03)');
@@ -897,7 +1226,6 @@ export class Simulation {
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fill();
 
-    // Petit point central
     ctx.beginPath();
     ctx.arc(0, 0, 3, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(231,76,60,0.5)';
@@ -906,26 +1234,22 @@ export class Simulation {
     ctx.restore();
   }
 
-  // ── Event log flottant des dernières résolutions ──────────────────────────
   _renderEventLog(ctx, W, H) {
     const now = performance.now();
-    const LOG_LIFETIME = 12000; // ms — durée de vie d'une entrée
+    const LOG_LIFETIME = 12000;
     const LINE_H = 22;
     const PAD_X = 16, PAD_Y = 8;
     const PANEL_W = 360;
 
-    // Filtrer les entrées encore vivantes
     const alive = this.eventLog.filter(e => (now - e.timestamp) < LOG_LIFETIME);
     if (alive.length === 0) return;
 
     const PANEL_H = alive.length * LINE_H + PAD_Y * 2;
-    // Position : bas-centre, au-dessus des contrôles (env. 80px du bas)
     const px = (W - PANEL_W) / 2;
     const py = H - 80 - PANEL_H;
 
     ctx.save();
 
-    // Fond semi-transparent
     ctx.fillStyle = 'rgba(5,8,20,0.72)';
     ctx.strokeStyle = 'rgba(255,255,255,0.07)';
     ctx.lineWidth = 1;
@@ -934,34 +1258,29 @@ export class Simulation {
     ctx.fill();
     ctx.stroke();
 
-    // Titre
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.font = '9px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText('ÉVÉNEMENTS RÉCENTS', px + PAD_X, py + 4);
 
-    // Lignes
     for (let i = 0; i < alive.length; i++) {
       const entry = alive[i];
       const age   = now - entry.timestamp;
       const alpha = Math.max(0.2, 1 - age / LOG_LIFETIME);
       const lineY = py + PAD_Y + i * LINE_H + 4;
 
-      // Pastille colorée
       ctx.beginPath();
       ctx.arc(px + PAD_X + 5, lineY + 7, 4, 0, Math.PI * 2);
       ctx.fillStyle = entry.color + Math.round(alpha * 255).toString(16).padStart(2,'0');
       ctx.fill();
 
-      // Texte
       ctx.fillStyle = `rgba(255,255,255,${(alpha * 0.85).toFixed(2)})`;
       ctx.font = '10px monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText(entry.text, px + PAD_X + 14, lineY + 7);
 
-      // Âge (s)
       ctx.fillStyle = `rgba(255,255,255,${(alpha * 0.35).toFixed(2)})`;
       ctx.font = '9px monospace';
       ctx.textAlign = 'right';
@@ -1059,7 +1378,6 @@ export class Simulation {
 
     let html = `<div class="cycle-indicator">${cycleLabel} — ${pct}%</div>`;
 
-    // Événement actif
     if (this.activeEvent) {
       const evPct = Math.round(this._eventTimer / this.activeEvent.duration * 100);
       html += `<div class="event-tag" style="border-color:${this.activeEvent.color};color:${this.activeEvent.color}">${this.activeEvent.label} ${evPct}%</div>`;
@@ -1072,6 +1390,7 @@ export class Simulation {
       const moodBar   = Math.round((e.mood + 1) / 2 * 100);
       const energyPct = Math.round(e.energy);
       const isSelected = (e === this.selectedEntity);
+      const isSaturated = (e.state === STATE.SATURE);
       html += `
         <div class="entity-row${isSelected ? ' entity-row--selected' : ''}" data-id="${e.id}" style="${isSelected ? `border-left:2px solid ${e.color};padding-left:4px` : ''}">
           <span class="entity-dot" style="background:${e.color}"></span>
@@ -1080,13 +1399,12 @@ export class Simulation {
           <span class="entity-stat">⚡${energyPct}</span>
           <span class="entity-stat ${moodClass}">😊${moodBar}%</span>
           ${e.successCount > 0 ? `<span class="entity-stat" style="color:#f9ca24">★${e.successCount}</span>` : ''}
+          ${isSaturated ? `<span class="entity-stat" style="color:#ff7675">😵</span>` : ''}
         </div>`;
     }
 
     html += `</div>`;
-
-    // Hint click
-    html += `<div style="margin-top:8px;font-size:9px;color:#555;text-align:center">Clic sur entité pour inspecter</div>`;
+    html += `<div style="margin-top:8px;font-size:9px;color:#555;text-align:center">Clic sur entité pour inspecter · H = heatmap</div>`;
 
     this.infoPanel.innerHTML = html;
   }

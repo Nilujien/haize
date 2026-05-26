@@ -11,6 +11,7 @@ export const STATE = {
   FUITE:    'FUITE',
   ERRANCE:  'ERRANCE',
   PROJET:   'PROJET',   // engagé sur un projet
+  SATURE:   'SATURE',   // surcharge sociale (introvertis)
 };
 
 // ─── Types de projets ─────────────────────────────────────────────────────────
@@ -124,6 +125,10 @@ export class Entity {
     this.social = 30 + Math.random() * 70;
     this.mood   = (Math.random() * 2 - 1) * 0.3;
 
+    // Charge sociale : monte quand entouré, descend quand seul
+    // Les introvertis saturent plus vite
+    this.socialCharge = 0; // 0..100
+
     this.state = STATE.ERRANCE;
 
     this.trail = [];
@@ -155,6 +160,33 @@ export class Entity {
       .sort((a, b) => b[1] - a[1])
       .slice(0, n)
       .map(([id, score]) => ({ id, score }));
+  }
+
+  // Seuil de saturation sociale : les introvertis saturent à charge plus basse
+  get socialSaturationThreshold() {
+    return 30 + this.character.socialite * 60; // 30..90
+  }
+
+  // Snapshot sauvegardable (positions exclues — trop volatiles)
+  toSnapshot() {
+    return {
+      id: this.id,
+      mood: this.mood,
+      energy: this.energy,
+      socialCharge: this.socialCharge,
+      successCount: this.successCount,
+      interactionLog: { ...this.interactionLog },
+    };
+  }
+
+  // Restaurer depuis snapshot
+  fromSnapshot(snap) {
+    if (!snap || snap.id !== this.id) return;
+    this.mood         = snap.mood         ?? this.mood;
+    this.energy       = snap.energy       ?? this.energy;
+    this.socialCharge = snap.socialCharge ?? 0;
+    this.successCount = snap.successCount ?? 0;
+    this.interactionLog = { ...(snap.interactionLog ?? {}) };
   }
 }
 

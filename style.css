@@ -257,3 +257,90 @@ canvas {
   from { opacity: 0.7; }
   to   { opacity: 1; }
 }
+
+/* ── Console événements ───────────────────────────────────────────────────── */
+#event-console {
+  position: fixed;
+  bottom: 76px;               /* juste au-dessus des contrôles */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 460px;
+  max-width: calc(100vw - 32px);
+  background: rgba(6, 9, 18, 0.88);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  z-index: 20;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
+}
+
+#event-console-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 12px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.03);
+}
+
+#event-console-title {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: rgba(255,255,255,0.3);
+  text-transform: uppercase;
+}
+
+#event-fps {
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  color: #2ecc71;
+  transition: color 0.4s;
+}
+
+#event-console-body {
+  max-height: 180px;
+  overflow: hidden;
+  padding: 5px 0 4px;
+}
+
+.console-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 12px;
+  transition: opacity 0.3s;
+}
+
+.console-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.console-text {
+  font-size: 10px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.5;
+}
+
+.console-age {
+  font-size: 9px;
+  color: rgba(255,255,255,0.22);
+  flex-shrink: 0;
+  min-width: 22px;
+  text-align: right;
+}
+
+.console-empty {
+  font-size: 10px;
+  color: rgba(255,255,255,0.18);
+  padding: 8px 12px;
+  font-style: italic;
+}

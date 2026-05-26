@@ -25,6 +25,15 @@
     <!-- généré par JS -->
   </div>
 
+  <!-- Console événements (au-dessus des contrôles) -->
+  <div id="event-console">
+    <div id="event-console-header">
+      <span id="event-console-title">◈ CONSOLE</span>
+      <span id="event-fps">-- fps</span>
+    </div>
+    <div id="event-console-body"></div>
+  </div>
+
   <!-- Contrôles -->
   <div id="controls">
     <button class="ctrl-btn" id="btn-pause">⏸ Pause</button>
@@ -184,6 +193,62 @@
     document.getElementById('btn-ev-fete').addEventListener('click',    () => sim.triggerEvent('FETE'));
     document.getElementById('btn-ev-tension').addEventListener('click', () => sim.triggerEvent('TENSION'));
     document.getElementById('btn-ev-deprime').addEventListener('click', () => sim.triggerEvent('DEPRIME'));
+
+    // ── Console événements HTML (mise à jour ~10fps) ──────────────────────
+    const consoleBody = document.getElementById('event-console-body');
+    const fpsBadge    = document.getElementById('event-fps');
+
+    const CATEGORY_COLORS = {
+      conflict:   '#e74c3c',
+      social:     '#2ecc71',
+      state:      '#a29bfe',
+      saturation: '#ff7675',
+      flee:       '#fd79a8',
+      project:    '#00cec9',
+      global:     '#fdcb6e',
+      cycle:      '#74b9ff',
+      info:       '#aaa',
+    };
+
+    let lastLogLen = -1;
+    let lastFps    = -1;
+    function updateConsole() {
+      const log = sim.eventLog;
+
+      // FPS badge
+      const fps = sim.fps;
+      if (fps !== lastFps) {
+        lastFps = fps;
+        const fpsColor = fps >= 55 ? '#2ecc71' : fps >= 30 ? '#f1c40f' : '#e74c3c';
+        fpsBadge.textContent = `${fps} fps`;
+        fpsBadge.style.color = fpsColor;
+      }
+
+      // Rebuild uniquement si le log a changé
+      if (log.length === lastLogLen && log[0]?.timestamp === consoleBody._lastTs) {
+        requestAnimationFrame(updateConsole);
+        return;
+      }
+      lastLogLen = log.length;
+      consoleBody._lastTs = log[0]?.timestamp;
+
+      const now = performance.now();
+      const MAX_SHOW = 30;
+      const html = log.slice(0, MAX_SHOW).map((entry, i) => {
+        const age    = Math.round((now - entry.timestamp) / 1000);
+        const color  = CATEGORY_COLORS[entry.category] || entry.color || '#aaa';
+        const opacity = i === 0 ? 1 : Math.max(0.3, 1 - i / MAX_SHOW * 0.8);
+        return `<div class="console-line" style="opacity:${opacity.toFixed(2)}">
+          <span class="console-dot" style="background:${entry.color || color}"></span>
+          <span class="console-text" style="color:${color}">${entry.text}</span>
+          <span class="console-age">${age}s</span>
+        </div>`;
+      }).join('');
+      consoleBody.innerHTML = html || '<div class="console-empty">En attente d\'événements…</div>';
+
+      requestAnimationFrame(updateConsole);
+    }
+    requestAnimationFrame(updateConsole);
   </script>
 </body>
 </html>

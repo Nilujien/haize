@@ -267,7 +267,19 @@ export class Simulation {
 
     // ── Historique d'événements flottant
     this.eventLog        = [];
-    this.EVENT_LOG_MAX   = 5;
+    this.EVENT_LOG_MAX   = 60;
+
+    // ── FPS tracking
+    this.fps             = 0;
+    this._fpsFrames      = 0;
+    this._fpsAccum       = 0;
+
+    // ── Throttles micro-events (éviter spam)
+    this._lastConflictLog  = {};   // key: "A-B" → timestamp
+    this._lastSocialLog    = {};   // key: "A-B" → timestamp
+    this._lastFuiteLog     = {};   // key: entityId → timestamp
+    this._lastSatLog       = {};   // key: entityId → timestamp
+    this._lastMoodLog      = {};   // key: entityId → timestamp
 
     // ── Événement global actif
     this.activeEvent     = null;
@@ -333,6 +345,11 @@ export class Simulation {
     this._notification   = null;
     this._floatingEmojis = [];
     this._moodSampleTimer = 0;
+    this._lastConflictLog = {};
+    this._lastSocialLog   = {};
+    this._lastFuiteLog    = {};
+    this._lastSatLog      = {};
+    this._lastMoodLog     = {};
   }
 
   // ── Clic sur le canvas ─────────────────────────────────────────────────────
@@ -364,6 +381,16 @@ export class Simulation {
     this.activeEvent  = ev;
     this._eventTimer  = 0;
     this._nextEventIn = 25000 + Math.random() * 25000;
+    this.pushEvent(`🌐 ${ev.label}`, ev.color || '#fff', 'global');
+  }
+
+  // ── Méthode publique : ajouter une entrée dans la console ─────────────────
+  pushEvent(text, color = '#aaa', category = 'info') {
+    const entry = { text, color, category, timestamp: performance.now() };
+    this.eventLog.unshift(entry);
+    if (this.eventLog.length > this.EVENT_LOG_MAX) {
+      this.eventLog.length = this.EVENT_LOG_MAX;
+    }
   }
 
   // ── Sauvegarde ─────────────────────────────────────────────────────────────
@@ -433,6 +460,16 @@ export class Simulation {
     const loop = (now) => {
       const rawDt = Math.min(now - this._lastTime, 50);
       this._lastTime = now;
+
+      // FPS tracking
+      this._fpsFrames++;
+      this._fpsAccum += rawDt;
+      if (this._fpsAccum >= 500) {
+        this.fps = Math.round(this._fpsFrames / (this._fpsAccum / 1000));
+        this._fpsFrames = 0;
+        this._fpsAccum  = 0;
+      }
+
       if (!this.paused) {
         const dt = rawDt * this.speedFactor;
         this._updateCycle(now);
@@ -454,7 +491,16 @@ export class Simulation {
   _updateCycle(now) {
     const elapsed  = (now - this.cycleStart) % this.dayDuration;
     const dayLen   = this.dayDuration * (1 - this.nightRatio);
+    const wasNight = this.isNight;
     this.isNight   = elapsed >= dayLen;
+    // Log transition jour ↔ nuit
+    if (wasNight !== this.isNight) {
+      if (this.isNight) {
+        this.pushEvent('🌙 La nuit tombe — les entités ralentissent', '#6c88c4', 'cycle');
+      } else {
+        this.pushEvent('☀️ Lever du jour — simulation active', '#f9ca24', 'cycle');
+      }
+    }
   }
 
   // ── Événements globaux ─────────────────────────────────────────────────────
@@ -548,6 +594,12 @@ export class Simulation {
         if (e.state !== STATE.PROJET && e.state !== STATE.SATURE) {
           e.state = STATE.FUITE;
           e._stateTimer = 0;
+        }
+        // Log fuite curseur (throttlé par entité)
+        const nowF = performance.now();
+        if (!this._lastFuiteLog[e.id] || nowF - this._lastFuiteLog[e.id] > 3000) {
+          this._lastFuiteLog[e.id] = nowF;
+          this.pushEvent(`👻 ${e.id} fuit le curseur`, e.color, 'flee');
         }
       }
 
@@ -643,6 +695,13 @@ export class Simulation {
               (e.y + other.y) / 2,
               Math.random() < 0.5 ? '💢' : '⚡'
             );
+            // Log conflit
+            const ck = [e.id, other.id].sort().join('-');
+            const now2 = performance.now();
+            if (!this._lastConflictLog[ck] || now2 - this._lastConflictLog[ck] > 4000) {
+              this._lastConflictLog[ck] = now2;
+              this.pushEvent(`💢 ${e.id} ↔ ${other.id} conflit`, '#e74c3c', 'conflict');
+            }
           }
         }
 
@@ -666,7 +725,19 @@ export class Simulation {
             if (e.character.socialite > 0.6 && e.state !== STATE.SATURE) {
               e.energy = Math.min(100, e.energy + 0.003 * dt);
             }
-            e.interactionLog[other.id] = (e.interactionLog[other.id] || 0) + dt * 0.001;
+            const prevScore = e.interactionLog[other.id] || 0;
+            e.interactionLog[other.id] = prevScore + dt * 0.001;
+
+            // Log interaction sociale (throttlé, seuil affinité)
+            if (affinity > 0.3 && Math.random() < 0.00015 * dt) {
+              const sk = [e.id, other.id].sort().join('-');
+              const now3 = performance.now();
+              if (!this._lastSocialLog[sk] || now3 - this._lastSocialLog[sk] > 6000) {
+                this._lastSocialLog[sk] = now3;
+                const tag = affinity > 0.6 ? '💛 affinité' : '🤝 contact';
+                this.pushEvent(`${tag} ${e.id} ↔ ${other.id}`, e.color, 'social');
+              }
+            }
           }
         }
       }
@@ -786,6 +857,7 @@ export class Simulation {
         if (this.eventLog.length > this.EVENT_LOG_MAX) {
           this.eventLog.length = this.EVENT_LOG_MAX;
         }
+        this.pushEvent(`🌟 Projet "${proj.label}" résolu par ${participantIds || '—'}`, proj.color, 'project');
       }
     }
 
@@ -823,6 +895,12 @@ export class Simulation {
         e._stateTimer = 0;
         // Légère perte d'humeur
         e.mood = Math.max(-1, e.mood - 0.15);
+        // Log saturation
+        const nowS = performance.now();
+        if (!this._lastSatLog[e.id] || nowS - this._lastSatLog[e.id] > 8000) {
+          this._lastSatLog[e.id] = nowS;
+          this.pushEvent(`😵 ${e.id} saturé (charge ${Math.round(e.socialCharge)}%)`, e.color, 'saturation');
+        }
       }
       return;
     }
@@ -845,6 +923,7 @@ export class Simulation {
     }
 
     if (newState !== e.state) {
+      const prevState = e.state;
       e.state = newState;
       e._stateTimer = 0;
 
@@ -858,9 +937,24 @@ export class Simulation {
         [STATE.PROJET]:  '🔧',
         [STATE.ERRANCE]: '🌀',
       };
+      const stateLabels = {
+        [STATE.SOCIAL]:  'SOCIAL',
+        [STATE.REPOS]:   'REPOS',
+        [STATE.ACTIF]:   'ACTIF',
+        [STATE.FUITE]:   'FUITE',
+        [STATE.SATURE]:  'SATURÉ',
+        [STATE.PROJET]:  'PROJET',
+        [STATE.ERRANCE]: 'ERRANCE',
+      };
       const emoji = stateEmojis[newState];
       if (emoji) {
         this._spawnFloatingEmoji(e.x, e.y, emoji);
+      }
+      // Log transition (sauf ERRANCE ↔ REPOS qui sont trop fréquents)
+      const noisy = new Set([`${STATE.ERRANCE}-${STATE.REPOS}`, `${STATE.REPOS}-${STATE.ERRANCE}`]);
+      const transKey = `${prevState}-${newState}`;
+      if (!noisy.has(transKey)) {
+        this.pushEvent(`${emoji || '→'} ${e.id} ${stateLabels[prevState] || '?'} → ${stateLabels[newState] || '?'}`, e.color, 'state');
       }
     }
   }
@@ -959,11 +1053,6 @@ export class Simulation {
     // Curseur
     if (this.mouseX > 0 && this.mouseX < W && this.mouseY > 0 && this.mouseY < H) {
       this._renderCursorZone(ctx);
-    }
-
-    // Event log flottant
-    if (this.eventLog.length > 0) {
-      this._renderEventLog(ctx, W, H);
     }
 
     // ── Notification (save/load feedback) ─────────────────────────────────

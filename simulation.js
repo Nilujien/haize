@@ -1166,6 +1166,17 @@ export class Simulation {
     e._stateTimer += dt;
     const minTime = 800;
 
+    // Cap durée EUPHORIQUE (15–25s) pour éviter états permanents
+    if (e.state === STATE.EUPHORIQUE) {
+      e._euphoriqueDuration = (e._euphoriqueDuration || 0) + dt;
+      if (e._euphoriqueDuration > (e._euphoriqueCap || 20000)) {
+        e.state = STATE.ERRANCE;
+        e._stateTimer = 0;
+        e._euphoriqueDuration = 0;
+        return;
+      }
+    }
+
     if (e._stateTimer < minTime) return;
 
     let newState = e.state;
@@ -1203,8 +1214,6 @@ export class Simulation {
       newState = STATE.ERRANCE;
     } else if (e.state === STATE.SATURE) {
       return; // Rester saturé jusqu'à récupération
-    } else if (e.energy < 20) {
-      newState = STATE.REPOS;
     } else if (e.state === STATE.FUITE && e._stateTimer > 2000) {
       newState = STATE.ERRANCE;
     } else if (e.mood > 0.7 && e.energy > 70 && !this.isNight &&
@@ -1212,8 +1221,10 @@ export class Simulation {
       // Euphorie : mood haute + énergie pleine
       newState = STATE.EUPHORIQUE;
     } else if (e.energy < 20 && e.mood > -0.3 && e.state !== STATE.SATURE) {
-      // Concentration : épuisé mais pas déprimé
+      // Concentration : épuisé mais pas déprimé (FIX: avant REPOS pour être atteignable)
       newState = STATE.CONCENTRE;
+    } else if (e.energy < 20) {
+      newState = STATE.REPOS;
     } else if (e.mood > 0.4 && e.character.socialite > 0.5 && !this.isNight) {
       newState = STATE.SOCIAL;
     } else if (e.energy > 70 && e.character.extraversion > 0.6) {
@@ -1226,6 +1237,12 @@ export class Simulation {
       const prevState = e.state;
       e.state = newState;
       e._stateTimer = 0;
+
+      // Initialiser cap durée EUPHORIQUE (15–25s aléatoire par entité)
+      if (newState === STATE.EUPHORIQUE) {
+        e._euphoriqueDuration = 0;
+        e._euphoriqueCap = 15000 + Math.random() * 10000;
+      }
 
       // Émettre un emoji flottant sur changement d'état significatif
       const stateEmojis = {
@@ -1843,13 +1860,15 @@ export class Simulation {
   // ── Choisir une pensée ambiante selon l'état/humeur de l'entité ──────────
   _pickThought(e) {
     const thoughts = {
-      [STATE.REPOS]:   ['💤', '😴', '🌙', 'zzz…'],
-      [STATE.SOCIAL]:  ['😄', '💬', '🤝', '✨'],
-      [STATE.ACTIF]:   ['⚡', '🔥', '💪', '🏃'],
-      [STATE.FUITE]:   ['😱', '💨', '👻', '😰'],
-      [STATE.SATURE]:  ['😵', '🤯', '😤', '🙅'],
-      [STATE.PROJET]:  ['🔧', '🛠️', '🎯', '💡'],
-      [STATE.ERRANCE]: ['🌀', '🤔', '👀', '🚶'],
+      [STATE.REPOS]:      ['💤', '😴', '🌙', 'zzz…'],
+      [STATE.SOCIAL]:     ['😄', '💬', '🤝', '✨'],
+      [STATE.ACTIF]:      ['⚡', '🔥', '💪', '🏃'],
+      [STATE.FUITE]:      ['😱', '💨', '👻', '😰'],
+      [STATE.SATURE]:     ['😵', '🤯', '😤', '🙅'],
+      [STATE.PROJET]:     ['🔧', '🛠️', '🎯', '💡'],
+      [STATE.ERRANCE]:    ['🌀', '🤔', '👀', '🚶'],
+      [STATE.EUPHORIQUE]: ['🌟', '😄', '🎉', '🤩', '💃'],
+      [STATE.CONCENTRE]:  ['🎯', '🧘', '💭', '✍️', '🔍'],
     };
     const moodBonus = e.mood > 0.5  ? ['😊', '💛', '🌟'] :
                       e.mood < -0.5 ? ['😢', '💔', '😞'] : [];
@@ -2006,27 +2025,39 @@ export class Simulation {
       ctx.fill();
     }
 
-    // Halo euphorique (aura dorée pulsante)
+    // Halo euphorique (aura dorée pulsante) — gradient caché pour perf
     if (e.state === STATE.EUPHORIQUE) {
       const eupPulse = 1 + Math.sin(performance.now() * 0.004 + e._noiseOffsetX) * 0.15;
       const eupHaloR = r * 2.5 * eupPulse;
       ctx.beginPath();
       ctx.arc(e.x, e.y, eupHaloR, 0, Math.PI * 2);
-      const eupGrad = ctx.createRadialGradient(e.x, e.y, r, e.x, e.y, eupHaloR);
-      eupGrad.addColorStop(0, 'rgba(255,215,0,0.25)');
-      eupGrad.addColorStop(1, 'transparent');
-      ctx.fillStyle = eupGrad;
+      // Cache : invalider si position bougée > 5px ou haloR delta > 3px
+      if (!e._eupGrad
+          || Math.hypot(e.x - (e._eupGradX || 0), e.y - (e._eupGradY || 0)) > 5
+          || Math.abs((e._eupGradR || 0) - eupHaloR) > 3) {
+        e._eupGrad = ctx.createRadialGradient(e.x, e.y, r, e.x, e.y, eupHaloR);
+        e._eupGrad.addColorStop(0, 'rgba(255,215,0,0.25)');
+        e._eupGrad.addColorStop(1, 'transparent');
+        e._eupGradX = e.x; e._eupGradY = e.y; e._eupGradR = eupHaloR;
+      }
+      ctx.fillStyle = e._eupGrad;
       ctx.fill();
     }
 
-    // Halo concentré (aura bleue douce, statique)
+    // Halo concentré (aura bleue douce, statique) — gradient caché pour perf
     if (e.state === STATE.CONCENTRE) {
+      const concR = r * 1.8;
       ctx.beginPath();
-      ctx.arc(e.x, e.y, r * 1.8, 0, Math.PI * 2);
-      const concGrad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, r * 1.8);
-      concGrad.addColorStop(0, 'rgba(116,185,255,0.18)');
-      concGrad.addColorStop(1, 'transparent');
-      ctx.fillStyle = concGrad;
+      ctx.arc(e.x, e.y, concR, 0, Math.PI * 2);
+      // Cache : invalider si position bougée > 5px
+      if (!e._concGrad
+          || Math.hypot(e.x - (e._concGradX || 0), e.y - (e._concGradY || 0)) > 5) {
+        e._concGrad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, concR);
+        e._concGrad.addColorStop(0, 'rgba(116,185,255,0.18)');
+        e._concGrad.addColorStop(1, 'transparent');
+        e._concGradX = e.x; e._concGradY = e.y;
+      }
+      ctx.fillStyle = e._concGrad;
       ctx.fill();
     }
 

@@ -995,8 +995,6 @@ export class Simulation {
       // État
       this._updateState(e, dt);
 
-      // Heatmap : enregistrer la position courante
-      this.heatmap.record(e.x, e.y);
     }
 
     // ── Échantillonnage humeur (mood history) ─────────────────────────────
@@ -1058,6 +1056,30 @@ export class Simulation {
           e.interactionLog[id] = Math.max(0, e.interactionLog[id] * 0.94);
           if (e.interactionLog[id] < 0.01) delete e.interactionLog[id];
         }
+      }
+    }
+
+    // -- Throttle heatmap record (~10x/s au lieu de 60x/s) -------------------
+    this._heatmapRecordTimer = (this._heatmapRecordTimer || 0) + dt;
+    if (this._heatmapRecordTimer >= 100) {
+      this._heatmapRecordTimer = 0;
+      for (const e of entities) {
+        this.heatmap.record(e.x, e.y);
+      }
+    }
+
+    // -- Decay zones memoire (oubli progressif) --------------------------------
+    const ZONE_DECAY_RATE = 0.0008; // ~1 unite toutes les 20s game time
+    for (const e of entities) {
+      if (e.happyZones.length > 0) {
+        e.happyZones = e.happyZones
+          .map(z => ({ ...z, score: z.score - ZONE_DECAY_RATE * dt }))
+          .filter(z => z.score > 0.1);
+      }
+      if (e.avoidZones.length > 0) {
+        e.avoidZones = e.avoidZones
+          .map(z => ({ ...z, score: z.score - ZONE_DECAY_RATE * dt }))
+          .filter(z => z.score > 0.1);
       }
     }
   }
@@ -1612,7 +1634,6 @@ export class Simulation {
     }
 
     // ── Zones heureuses / évitées ──────────────────────────────────────────
-    const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
     if (hasZones) {
       drawSep();
       ctx.font      = '9px monospace';
@@ -2216,13 +2237,19 @@ export class Simulation {
       const energyPct = Math.round(e.energy);
       const isSelected = (e === this.selectedEntity);
       const isSaturated = (e.state === STATE.SATURE);
+      const moodTrend = (() => {
+        const hist = e.moodHistory;
+        if (hist.length < 3) return '';
+        const delta = hist[hist.length - 1] - hist[hist.length - 3];
+        return delta > 0.05 ? String.fromCodePoint(0x2191) : delta < -0.05 ? String.fromCodePoint(0x2193) : String.fromCodePoint(0x2192);
+      })();
       html += `
         <div class="entity-row${isSelected ? ' entity-row--selected' : ''}" data-id="${e.id}" style="${isSelected ? `border-left:2px solid ${e.color};padding-left:4px` : ''}">
           <span class="entity-dot" style="background:${e.color}"></span>
           <span class="entity-id">${e.id}</span>
           <span class="entity-state state-${e.state.toLowerCase()}">${e.state}</span>
           <span class="entity-stat">⚡${energyPct}</span>
-          <span class="entity-stat ${moodClass}">😊${moodBar}%</span>
+          <span class="entity-stat ${moodClass}">${moodBar}%${moodTrend}</span>
           ${e.successCount > 0 ? `<span class="entity-stat" style="color:#f9ca24">★${e.successCount}</span>` : ''}
           ${isSaturated ? `<span class="entity-stat" style="color:#ff7675">😵</span>` : ''}
         </div>`;

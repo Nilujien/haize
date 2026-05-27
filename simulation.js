@@ -485,6 +485,8 @@ export class Simulation {
     if (this.eventLog.length > this.EVENT_LOG_MAX) {
       this.eventLog.length = this.EVENT_LOG_MAX;
     }
+    // Marquer la console comme dirty pour le timer intégré
+    this._consoleDirty = true;
   }
 
   // ── Sauvegarde ─────────────────────────────────────────────────────────────
@@ -591,6 +593,14 @@ export class Simulation {
         if (this._panelTimer >= 200) {
           this._panelTimer = 0;
           this._updatePanel();
+        }
+
+        // Console dirty — notifier index.html toutes les 100ms si changement
+        this._consoleTimer = (this._consoleTimer || 0) + rawDt;
+        if (this._consoleTimer >= 100 && this._consoleDirty) {
+          this._consoleTimer = 0;
+          this._consoleDirty = false;
+          if (this.onConsoleDirty) this.onConsoleDirty();
         }
       }
       this._rafId = requestAnimationFrame(loop);
@@ -1780,11 +1790,12 @@ export class Simulation {
       ctx.beginPath();
       ctx.arc(e.homeX, e.homeY, effectiveRadius, 0, Math.PI * 2);
 
-      // Gradient : créer seulement si le home a bougé de plus de 5px
-      const cacheKey = `${Math.round(e.homeX/5)*5}_${Math.round(e.homeY/5)*5}`;
+      // Gradient : invalider si home bougé > 5px OU si effectiveRadius a varié > 2px (pulse fix)
+      const erRounded = Math.round(effectiveRadius / 2) * 2;
+      const cacheKey = `${Math.round(e.homeX/5)*5}_${Math.round(e.homeY/5)*5}_${erRounded}`;
       if (!e._territoryGradCache || e._territoryGradCacheKey !== cacheKey) {
         e._territoryGradCache = ctx.createRadialGradient(
-          e.homeX, e.homeY, e.homeRadius * 0.3,
+          e.homeX, e.homeY, effectiveRadius * 0.3,
           e.homeX, e.homeY, effectiveRadius
         );
         const alphaHex1 = Math.round(alpha * 255 * 1.5).toString(16).padStart(2,'0');
@@ -1813,17 +1824,26 @@ export class Simulation {
     const isSelected = (e === this.selectedEntity);
     const isSaturated = (e.state === STATE.SATURE);
 
-    // Halo saturation sociale (aura violacée-rouge pour les saturés)
+    // Halo saturation sociale (aura violacée-rouge pour les saturés) — gradient caché
     if (isSaturated) {
       const satPct = Math.min(1, e.socialCharge / 100);
       const satAlpha = satPct * 0.5;
       const haloR = r * (2.2 + Math.sin(performance.now() * 0.003) * 0.3);
-      const grad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, haloR);
-      grad.addColorStop(0, `rgba(255,118,117,${satAlpha.toFixed(2)})`);
-      grad.addColorStop(1, 'transparent');
+      // Invalider si charge sociale a varié > 5 ou position bougée > 5px
+      if (!e._satGrad
+          || Math.abs(e._satGradCharge - e.socialCharge) > 5
+          || Math.hypot(e.x - e._satGradX, e.y - e._satGradY) > 5) {
+        e._satGrad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, haloR);
+        e._satGrad.addColorStop(0, `rgba(255,118,117,${satAlpha.toFixed(2)})`);
+        e._satGrad.addColorStop(1, 'transparent');
+        e._satGradCharge = e.socialCharge;
+        e._satGradX = e.x;
+        e._satGradY = e.y;
+        e._satGradR = haloR;
+      }
       ctx.beginPath();
-      ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2);
-      ctx.fillStyle = grad;
+      ctx.arc(e.x, e.y, e._satGradR, 0, Math.PI * 2);
+      ctx.fillStyle = e._satGrad;
       ctx.fill();
     }
 
@@ -1851,20 +1871,31 @@ export class Simulation {
       ctx.stroke();
     }
 
-    // Halo humeur (skip si mood faible pour économiser les gradients)
+    // Halo humeur — gradient caché (invalidé si signe changé, absMood delta > 0.08, ou dépl > 5px)
     const absMood = Math.abs(e.mood);
     if (absMood > 0.15) {
-      const haloAlpha = absMood * 0.35;
-      const haloColor = e.mood > 0
-        ? `rgba(46,204,113,${haloAlpha.toFixed(2)})`
-        : `rgba(231,76,60,${haloAlpha.toFixed(2)})`;
+      const moodSign = e.mood > 0 ? 1 : -1;
       const haloR = r * (1.6 + absMood * 0.8);
-      const grad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, haloR);
-      grad.addColorStop(0, haloColor);
-      grad.addColorStop(1, 'transparent');
+      if (!e._moodGrad
+          || e._moodGradSign !== moodSign
+          || Math.abs(e._moodGradAbsMood - absMood) > 0.08
+          || Math.hypot(e.x - e._moodGradX, e.y - e._moodGradY) > 5) {
+        const haloAlpha = absMood * 0.35;
+        const haloColor = e.mood > 0
+          ? `rgba(46,204,113,${haloAlpha.toFixed(2)})`
+          : `rgba(231,76,60,${haloAlpha.toFixed(2)})`;
+        e._moodGrad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, haloR);
+        e._moodGrad.addColorStop(0, haloColor);
+        e._moodGrad.addColorStop(1, 'transparent');
+        e._moodGradSign    = moodSign;
+        e._moodGradAbsMood = absMood;
+        e._moodGradX       = e.x;
+        e._moodGradY       = e.y;
+        e._moodGradR       = haloR;
+      }
       ctx.beginPath();
-      ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2);
-      ctx.fillStyle = grad;
+      ctx.arc(e.x, e.y, e._moodGradR, 0, Math.PI * 2);
+      ctx.fillStyle = e._moodGrad;
       ctx.fill();
     }
 

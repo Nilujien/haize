@@ -197,7 +197,7 @@
     document.getElementById('btn-ev-deprime').addEventListener('click', () => sim.triggerEvent('DEPRIME'));
     document.getElementById('btn-ev-epidemie').addEventListener('click', () => sim.triggerEvent('EPIDEMIE'));
 
-    // ── Console événements HTML (mise à jour ~10fps) ──────────────────────
+    // ── Console événements HTML — pilotée par sim.onConsoleDirty + rAF FPS ──
     const consoleBody = document.getElementById('event-console-body');
     const fpsBadge    = document.getElementById('event-fps');
     const perfBadge   = document.getElementById('event-perf');
@@ -215,31 +215,25 @@
     };
 
     let lastLogLen = -1;
-    let lastFps    = -1;
-    function updateConsole() {
-      const log = sim.eventLog;
 
-      // FPS badge
+    // Met à jour les badges FPS/perf — appelé chaque rAF (léger)
+    function updateFpsBadge() {
       const fps = sim.fps;
-      if (fps !== lastFps) {
-        lastFps = fps;
-        const fpsColor = fps >= 55 ? '#2ecc71' : fps >= 30 ? '#f1c40f' : '#e74c3c';
-        fpsBadge.textContent = `${fps} fps`;
-        fpsBadge.style.color = fpsColor;
-      }
-
-      // Perf badge (update/render ms)
+      const fpsColor = fps >= 55 ? '#2ecc71' : fps >= 30 ? '#f1c40f' : '#e74c3c';
+      fpsBadge.textContent = `${fps} fps`;
+      fpsBadge.style.color = fpsColor;
       if (sim.perfUpdate !== undefined) {
         const u = sim.perfUpdate?.toFixed(1) ?? '?';
         const r = sim.perfRender?.toFixed(1) ?? '?';
         perfBadge.textContent = `u:${u}ms r:${r}ms`;
       }
+      requestAnimationFrame(updateFpsBadge);
+    }
+    requestAnimationFrame(updateFpsBadge);
 
-      // Rebuild uniquement si le log a changé
-      if (log.length === lastLogLen && log[0]?.timestamp === consoleBody._lastTs) {
-        requestAnimationFrame(updateConsole);
-        return;
-      }
+    // Rebuild console HTML — déclenché uniquement via onConsoleDirty (depuis sim loop)
+    function updateConsole() {
+      const log = sim.eventLog;
       lastLogLen = log.length;
       consoleBody._lastTs = log[0]?.timestamp;
 
@@ -256,10 +250,10 @@
         </div>`;
       }).join('');
       consoleBody.innerHTML = html || '<div class="console-empty">En attente d\'événements…</div>';
-
-      requestAnimationFrame(updateConsole);
     }
-    requestAnimationFrame(updateConsole);
+
+    // Câbler le callback sur la boucle de simulation
+    sim.onConsoleDirty = updateConsole;
   </script>
 </body>
 </html>

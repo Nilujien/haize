@@ -5,13 +5,15 @@
 
 // ─── États possibles ───────────────────────────────────────────────────────────
 export const STATE = {
-  ACTIF:    'ACTIF',
-  REPOS:    'REPOS',
-  SOCIAL:   'SOCIAL',
-  FUITE:    'FUITE',
-  ERRANCE:  'ERRANCE',
-  PROJET:   'PROJET',   // engagé sur un projet
-  SATURE:   'SATURE',   // surcharge sociale (introvertis)
+  ACTIF:      'ACTIF',
+  REPOS:      'REPOS',
+  SOCIAL:     'SOCIAL',
+  FUITE:      'FUITE',
+  ERRANCE:    'ERRANCE',
+  PROJET:     'PROJET',      // engagé sur un projet
+  SATURE:     'SATURE',      // surcharge sociale (introvertis)
+  EUPHORIQUE: 'EUPHORIQUE',  // mood > 0.7 AND energy > 70 → couleur dorée, vitesse +20%
+  CONCENTRE:  'CONCENTRE',   // energy < 20 AND mood > -0.3 → vitesse réduite, moins social
 };
 
 // ─── Types de projets ─────────────────────────────────────────────────────────

@@ -388,6 +388,10 @@ export class Simulation {
     // ── Friendship threshold (score minimum pour afficher un lien d'amitié)
     this.FRIENDSHIP_THRESHOLD = 8;
 
+    // ── Cache liens d'amitié (rebuild 5×/s dans _update, lu dans _renderFriendshipLinks)
+    this._activeFriendLinks = []; // [{ a, b, score, strength }]
+    this._friendLinkTimer   = 0;
+
     this._lastTime   = performance.now();
     this._rafId      = null;
 
@@ -892,11 +896,15 @@ export class Simulation {
 
       // Nuit : ralentissement
       const nightMult = this.isNight ? 0.3 : 1.0;
+      // Modificateur vitesse selon état
+      const stateSpeedMult = e.state === STATE.EUPHORIQUE ? 1.2
+                           : e.state === STATE.CONCENTRE  ? 0.5
+                           : 1.0;
 
       e.vx *= this.FRICTION;
       e.vy *= this.FRICTION;
       const speed = Math.sqrt(e.vx * e.vx + e.vy * e.vy);
-      const maxSpd = this.MAX_SPEED * nightMult *
+      const maxSpd = this.MAX_SPEED * nightMult * stateSpeedMult *
                      (0.4 + e.character.extraversion * 0.6);
       if (speed > maxSpd) {
         e.vx = (e.vx / speed) * maxSpd;
@@ -995,6 +1003,28 @@ export class Simulation {
       // État
       this._updateState(e, dt);
 
+    }
+
+    // ── Rebuild cache liens d'amitié (5×/s, évite O(n²)×O(affinités) à chaque frame) ──
+    this._friendLinkTimer += dt;
+    if (this._friendLinkTimer >= 200) {
+      this._friendLinkTimer = 0;
+      this._activeFriendLinks = [];
+      const interactRadSqFL = this.INTERACTION_RADIUS * this.INTERACTION_RADIUS;
+      for (let i = 0; i < entities.length; i++) {
+        for (let j = i + 1; j < entities.length; j++) {
+          const a = entities[i], b = entities[j];
+          const scoreA = a.interactionLog[b.id] || 0;
+          const scoreB = b.interactionLog[a.id] || 0;
+          const score  = (scoreA + scoreB) / 2;
+          if (score < this.FRIENDSHIP_THRESHOLD) continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < interactRadSqFL || distSq > 700 * 700) continue;
+          const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
+          this._activeFriendLinks.push({ a, b, score, strength });
+        }
+      }
     }
 
     // ── Échantillonnage humeur (mood history) ─────────────────────────────
@@ -1177,6 +1207,13 @@ export class Simulation {
       newState = STATE.REPOS;
     } else if (e.state === STATE.FUITE && e._stateTimer > 2000) {
       newState = STATE.ERRANCE;
+    } else if (e.mood > 0.7 && e.energy > 70 && !this.isNight &&
+               e.state !== STATE.SATURE && e.state !== STATE.PROJET) {
+      // Euphorie : mood haute + énergie pleine
+      newState = STATE.EUPHORIQUE;
+    } else if (e.energy < 20 && e.mood > -0.3 && e.state !== STATE.SATURE) {
+      // Concentration : épuisé mais pas déprimé
+      newState = STATE.CONCENTRE;
     } else if (e.mood > 0.4 && e.character.socialite > 0.5 && !this.isNight) {
       newState = STATE.SOCIAL;
     } else if (e.energy > 70 && e.character.extraversion > 0.6) {
@@ -1192,22 +1229,26 @@ export class Simulation {
 
       // Émettre un emoji flottant sur changement d'état significatif
       const stateEmojis = {
-        [STATE.SOCIAL]:  '💬',
-        [STATE.REPOS]:   '😴',
-        [STATE.ACTIF]:   '⚡',
-        [STATE.FUITE]:   '💨',
-        [STATE.SATURE]:  '😵',
-        [STATE.PROJET]:  '🔧',
-        [STATE.ERRANCE]: '🌀',
+        [STATE.SOCIAL]:     '💬',
+        [STATE.REPOS]:      '😴',
+        [STATE.ACTIF]:      '⚡',
+        [STATE.FUITE]:      '💨',
+        [STATE.SATURE]:     '😵',
+        [STATE.PROJET]:     '🔧',
+        [STATE.ERRANCE]:    '🌀',
+        [STATE.EUPHORIQUE]: '✨',
+        [STATE.CONCENTRE]:  '🎯',
       };
       const stateLabels = {
-        [STATE.SOCIAL]:  'SOCIAL',
-        [STATE.REPOS]:   'REPOS',
-        [STATE.ACTIF]:   'ACTIF',
-        [STATE.FUITE]:   'FUITE',
-        [STATE.SATURE]:  'SATURÉ',
-        [STATE.PROJET]:  'PROJET',
-        [STATE.ERRANCE]: 'ERRANCE',
+        [STATE.SOCIAL]:     'SOCIAL',
+        [STATE.REPOS]:      'REPOS',
+        [STATE.ACTIF]:      'ACTIF',
+        [STATE.FUITE]:      'FUITE',
+        [STATE.SATURE]:     'SATURÉ',
+        [STATE.PROJET]:     'PROJET',
+        [STATE.ERRANCE]:    'ERRANCE',
+        [STATE.EUPHORIQUE]: 'EUPHORIQUE',
+        [STATE.CONCENTRE]:  'CONCENTRÉ',
       };
       const emoji = stateEmojis[newState];
       if (emoji) {
@@ -1452,6 +1493,7 @@ export class Simulation {
     const stateColors = {
       ACTIF: '#f1c40f', REPOS: '#95a5a6', SOCIAL: '#2ecc71',
       FUITE: '#e74c3c', ERRANCE: '#9b59b6', PROJET: '#00cec9', SATURE: '#ff7675',
+      EUPHORIQUE: '#ffd700', CONCENTRE: '#74b9ff',
     };
 
     // ── Pré-calculer la hauteur totale ──────────────────────────────────────
@@ -1725,54 +1767,34 @@ export class Simulation {
 
   // ── Liens d'amitié persistants ────────────────────────────────────────────
   _renderFriendshipLinks(ctx) {
-    const entities = this.entities;
+    if (this._activeFriendLinks.length === 0) return;
     const now = performance.now();
     const pulse = 0.5 + Math.sin(now * 0.0015) * 0.3;
-    const interactRadSq = this.INTERACTION_RADIUS * this.INTERACTION_RADIUS;
 
-    // Pour chaque paire, vérifier si le score d'interaction est assez élevé
-    for (let i = 0; i < entities.length; i++) {
-      const a = entities[i];
-      for (let j = i + 1; j < entities.length; j++) {
-        const b = entities[j];
-        const scoreA = a.interactionLog[b.id] || 0;
-        const scoreB = b.interactionLog[a.id] || 0;
-        const score  = (scoreA + scoreB) / 2;
+    // Utiliser le cache pré-calculé dans _update (rebuild 5×/s) — plus de O(n²) ici
+    for (const { a, b, score, strength } of this._activeFriendLinks) {
+      const alpha = strength * pulse * 0.35;
 
-        if (score < this.FRIENDSHIP_THRESHOLD) continue;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
 
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const distSq = dx * dx + dy * dy;
+      ctx.strokeStyle = `rgba(255,200,100,${alpha.toFixed(3)})`;
+      ctx.lineWidth   = 0.8 + strength * 1.5;
+      ctx.setLineDash([4, 8]);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-        // Seulement si pas déjà trop proches (éviter le doublon avec la ligne de proximité)
-        if (distSq < interactRadSq) continue;
-        if (distSq > 700 * 700) continue;
-
-        const dist = Math.sqrt(distSq);
-        const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
-        const alpha = strength * pulse * 0.35;
-
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-
-        ctx.strokeStyle = `rgba(255,200,100,${alpha.toFixed(3)})`;
-        ctx.lineWidth   = 0.8 + strength * 1.5;
-        ctx.setLineDash([4, 8]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Petit cœur au milieu si score très élevé
-        if (score > 40) {
-          const midX = (a.x + b.x) / 2;
-          const midY = (a.y + b.y) / 2;
-          ctx.font = '10px monospace';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.globalAlpha = alpha * 2;
-          ctx.fillText('💛', midX, midY);
-          ctx.globalAlpha = 1;
-        }
+      // Petit cœur au milieu si score très élevé
+      if (score > 40) {
+        const midX = (a.x + b.x) / 2;
+        const midY = (a.y + b.y) / 2;
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.globalAlpha = alpha * 2;
+        ctx.fillText('💛', midX, midY);
+        ctx.globalAlpha = 1;
       }
     }
   }
@@ -1846,12 +1868,17 @@ export class Simulation {
     for (const t of this._thoughtBubbles) {
       const age = now - t.born;
       const progress = age / t.life;
-      // Apparaît doucement, flotte vers le haut, disparaît
       const alpha = progress < 0.2 ? progress / 0.2 : Math.max(0, 1 - (progress - 0.2) / 0.8);
-      const rise = progress * 28; // monte de 28px sur toute la durée
+      const rise = progress * 28;
 
-      // Petite bulle de fond
-      const bx = t.x, by = t.y - (t.radius || 22) - 18 - rise;
+      // Suivre l'entité en mouvement pendant la première moitié de vie, puis dériver
+      let bx = t.x, by;
+      if (progress < 0.5) {
+        const entity = this.entities.find(e => e.id === t.entityId);
+        if (entity) { bx = entity.x; t.x = entity.x; t.y = entity.y; }
+      }
+      by = t.y - (t.radius || 22) - 18 - rise;
+
       ctx.globalAlpha = alpha * 0.7;
       ctx.fillStyle = 'rgba(20,22,40,0.75)';
       ctx.beginPath();
@@ -1887,13 +1914,12 @@ export class Simulation {
       ctx.beginPath();
       ctx.arc(e.homeX, e.homeY, effectiveRadius, 0, Math.PI * 2);
 
-      // Gradient : invalider si home bougé > 5px OU si effectiveRadius a varié > 2px (pulse fix)
-      const erRounded = Math.round(effectiveRadius / 2) * 2;
-      const cacheKey = `${Math.round(e.homeX/5)*5}_${Math.round(e.homeY/5)*5}_${erRounded}`;
+      // Gradient : invalider uniquement si home a bougé > 5px (pas sur le pulse — imperceptible)
+      const cacheKey = `${Math.round(e.homeX/5)*5}_${Math.round(e.homeY/5)*5}`;
       if (!e._territoryGradCache || e._territoryGradCacheKey !== cacheKey) {
         e._territoryGradCache = ctx.createRadialGradient(
-          e.homeX, e.homeY, effectiveRadius * 0.3,
-          e.homeX, e.homeY, effectiveRadius
+          e.homeX, e.homeY, e.homeRadius * 0.3,
+          e.homeX, e.homeY, e.homeRadius
         );
         const alphaHex1 = Math.round(alpha * 255 * 1.5).toString(16).padStart(2,'0');
         e._territoryGradCache.addColorStop(0, e.color + alphaHex1);
@@ -1977,6 +2003,30 @@ export class Simulation {
       ctx.beginPath();
       ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2); // Fix: dessiner le haloR courant (pulse), pas le cached
       ctx.fillStyle = e._satGrad;
+      ctx.fill();
+    }
+
+    // Halo euphorique (aura dorée pulsante)
+    if (e.state === STATE.EUPHORIQUE) {
+      const eupPulse = 1 + Math.sin(performance.now() * 0.004 + e._noiseOffsetX) * 0.15;
+      const eupHaloR = r * 2.5 * eupPulse;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, eupHaloR, 0, Math.PI * 2);
+      const eupGrad = ctx.createRadialGradient(e.x, e.y, r, e.x, e.y, eupHaloR);
+      eupGrad.addColorStop(0, 'rgba(255,215,0,0.25)');
+      eupGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = eupGrad;
+      ctx.fill();
+    }
+
+    // Halo concentré (aura bleue douce, statique)
+    if (e.state === STATE.CONCENTRE) {
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, r * 1.8, 0, Math.PI * 2);
+      const concGrad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, r * 1.8);
+      concGrad.addColorStop(0, 'rgba(116,185,255,0.18)');
+      concGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = concGrad;
       ctx.fill();
     }
 
@@ -2069,13 +2119,15 @@ export class Simulation {
 
     // Point d'état
     const stateColors = {
-      [STATE.ACTIF]:   '#f1c40f',
-      [STATE.REPOS]:   '#95a5a6',
-      [STATE.SOCIAL]:  '#2ecc71',
-      [STATE.FUITE]:   '#e74c3c',
-      [STATE.ERRANCE]: '#9b59b6',
-      [STATE.PROJET]:  '#00cec9',
-      [STATE.SATURE]:  '#ff7675',
+      [STATE.ACTIF]:      '#f1c40f',
+      [STATE.REPOS]:      '#95a5a6',
+      [STATE.SOCIAL]:     '#2ecc71',
+      [STATE.FUITE]:      '#e74c3c',
+      [STATE.ERRANCE]:    '#9b59b6',
+      [STATE.PROJET]:     '#00cec9',
+      [STATE.SATURE]:     '#ff7675',
+      [STATE.EUPHORIQUE]: '#ffd700',
+      [STATE.CONCENTRE]:  '#74b9ff',
     };
     ctx.beginPath();
     ctx.arc(e.x + r * 0.65, e.y - r * 0.65, 4, 0, Math.PI * 2);
@@ -2237,8 +2289,7 @@ export class Simulation {
       const energyPct = Math.round(e.energy);
       const isSelected = (e === this.selectedEntity);
       const isSaturated = (e.state === STATE.SATURE);
-      const moodTrend = (() => {
-        const hist = e.moodHistory;
+      const moodTrend = (() => {        const hist = e.moodHistory;
         if (hist.length < 3) return '';
         const delta = hist[hist.length - 1] - hist[hist.length - 3];
         return delta > 0.05 ? String.fromCodePoint(0x2191) : delta < -0.05 ? String.fromCodePoint(0x2193) : String.fromCodePoint(0x2192);

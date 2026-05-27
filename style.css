@@ -87,12 +87,14 @@ canvas {
 }
 
 .state-actif    { background: rgba(241,196,15,0.18);  color: #f1c40f; }
-.state-repos    { background: rgba(149,165,166,0.15); color: #bdc3c7; }
-.state-social   { background: rgba(46,204,113,0.18);  color: #2ecc71; }
-.state-fuite    { background: rgba(231,76,60,0.18);   color: #e74c3c; }
-.state-errance  { background: rgba(155,89,182,0.18);  color: #c39bd3; }
-.state-projet   { background: rgba(0,206,201,0.18);   color: #00cec9; }
-.state-sature   { background: rgba(255,118,117,0.18); color: #ff7675; }
+.state-repos       { background: rgba(149,165,166,0.15); color: #bdc3c7; }
+.state-social      { background: rgba(46,204,113,0.18);  color: #2ecc71; }
+.state-fuite       { background: rgba(231,76,60,0.18);   color: #e74c3c; }
+.state-errance     { background: rgba(155,89,182,0.18);  color: #c39bd3; }
+.state-projet      { background: rgba(0,206,201,0.18);   color: #00cec9; }
+.state-sature      { background: rgba(255,118,117,0.18); color: #ff7675; }
+.state-euphorique  { background: rgba(255,215,0,0.18);   color: #ffd700; }
+.state-concentre   { background: rgba(116,185,255,0.18); color: #74b9ff; }
 
 .entity-stat { font-size: 9px; color: #666; flex-shrink: 0; }
 .mood-pos    { color: #2ecc71 !important; }

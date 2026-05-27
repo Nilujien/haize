@@ -1381,6 +1381,27 @@ export class Simulation {
       this.pushEvent(`✨ ${euphoricOne.id} entraîne ${other.id} dans l'euphorie`, euphoricOne.color, 'social');
       return;
     }
+
+    // 3. Réconciliation spontanée : ex-ennemis proches (conflictCount 2-3, dist < 100) avec mood positive
+    for (const [ck, count] of Object.entries(this._conflictCount)) {
+      if (count < 2 || count > 4) continue; // pas les rancunes profondes (>4)
+      const [idA, idB] = ck.split('-');
+      const a = entities.find(e => e.id === idA);
+      const b = entities.find(e => e.id === idB);
+      if (!a || !b) continue;
+      if (a.mood < 0.2 || b.mood < 0.2) continue; // les deux doivent être de bonne humeur
+      const dx = a.x - b.x, dy = a.y - b.y;
+      if (dx * dx + dy * dy > 100 * 100) continue;
+      if (Math.random() > 0.08) continue; // 8% de chance
+      // Réconciliation : baisser le conflictCount et améliorer l'humeur
+      this._conflictCount[ck] = Math.max(0, count - 2);
+      if (this._conflictCount[ck] <= 0) delete this._conflictCount[ck];
+      a.mood = Math.min(1, a.mood + 0.15);
+      b.mood = Math.min(1, b.mood + 0.15);
+      this._spawnFloatingEmoji((a.x + b.x) / 2, (a.y + b.y) / 2, '🤝');
+      this.pushEvent(`🤝 Réconciliation spontanée : ${idA} et ${idB}`, '#55efc4', 'social');
+      return;
+    }
   }
 
   _updateProjects(dt) {
@@ -1463,9 +1484,15 @@ export class Simulation {
       }
     }
 
-    // Plancher CONCENTRE (4-7s) : empêcher la sortie immédiate par regen d'énergie
+    // Durée CONCENTRÉ : cap max (40-60s) + plancher min (4-7s)
     if (e.state === STATE.CONCENTRE) {
       e._concentreDuration = (e._concentreDuration || 0) + dt;
+      if (e._concentreDuration > (e._concentreCap || 50000)) {
+        e.state = STATE.REPOS;
+        e._stateTimer = 0;
+        e._concentreDuration = 0;
+        return;
+      }
       if (e._concentreDuration < (e._concentreMinDuration || 4000)) return;
     }
 
@@ -1548,6 +1575,7 @@ export class Simulation {
       if (newState === STATE.CONCENTRE) {
         e._concentreDuration = 0;
         e._concentreMinDuration = 4000 + Math.random() * 3000;
+        e._concentreCap = 40000 + Math.random() * 20000; // 40-60s max
         e._socialLoadTimer = 0; // B1 : évite ré-entrée immédiate via P3 si timer élevé
         // D : détecter si c'est une retraite introvertie (P3) ou épuisement physique
         e._concentreViaP3 = e.character.extraversion < 0.3
@@ -2235,8 +2263,8 @@ export class Simulation {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Petit cœur au milieu si score très élevé
-      if (score > 40) {
+      // Fix double-render: cœur sur lien lointain seulement (isClose → passe rapprochée)// Petit cœur au milieu si score très élevé
+      if (score > 40 && !isClose) {
         const midX = (a.x + b.x) / 2;
         const midY = (a.y + b.y) / 2;
         ctx.font = '10px monospace';

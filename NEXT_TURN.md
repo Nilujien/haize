@@ -1,5 +1,5 @@
 # HAIZE — Plan du prochain tour
-_Rédigé le : 27/05/2026 19:15 (analyse autonome Jubis)_
+_Rédigé le : 27/05/2026 20:15 (analyse autonome Jubis)_
 
 ---
 
@@ -7,152 +7,198 @@ _Rédigé le : 27/05/2026 19:15 (analyse autonome Jubis)_
 
 ### Ce qui fonctionne bien
 
-- Architecture FSM 9 états solide et bien documentée
-- Caches de gradients (humeur, euphorique, concentré, saturation) correctement invalidés
-- `_activeFriendLinks` / `_activeRancorLinks` parallèles et cohérents (rebuild 5×/s)
-- Heatmap via OffscreenCanvas + LUT précalculée → optimal
-- Panel inspect Canvas détaillé avec sparkline, rancœurs, expériences
-- Adaptive render skip (skip 1 frame/2 si update > 8ms) → bonne protection CPU
-- Système de territoires + dérive lente du home → cohérent et discret visuellement
-- Mémoire des lieux heureux/évités fonctionnelle, decay progressif
-- Save/load complet avec backward compat (happyZones, avoidZones, concentreDurations optionnels)
+- Architecture FSM 9 états toujours solide, bien documentée
+- **Fix B1 réalisé** : `isClose` intégré dans `_activeFriendLinks` — la "passe proche-amis" utilise désormais le cache, O(n²) render eliminé ✅
+- Gradients halos (humeur, euphorique, concentré, saturation) correctement invalidés par cache
+- Heatmap OffscreenCanvas + LUT → optimal
+- Panel inspect Canvas avec sparkline, rancœurs, expériences
+- Adaptive render skip fonctionnel (skip 1 frame/2 si update > 8ms)
+- Territoires + dérive lente du home → cohérent visuellement
+- Mémoire lieux heureux/évités avec decay progressif
+- Save/load complet avec backward compat
+- Pensées ambiantes et emojis flottants → bon feedback visuel
 
 ### Ce qui pose problème
 
-1. **Double O(n²) non-caché dans le render** (voir Bugs)
-2. **`successCounts` sauvegardé deux fois** dans le snapshot (top-level ET dans entity.toSnapshot)
-3. **data-id dans info-panel jamais utilisé** — feature incomplète muette
-4. **Inconsistance sémantique** : le decay nocturne de `socialCharge` utilise `1 - socialite` mais les deux autres utilisations similaires utilisent `1 - extraversion` (introvertis = basse extraversion, pas forcément basse socialite)
+1. **`_renderRecruitLinks` toujours O(n²) non-caché** — priorité 1 non finalisée du dernier plan
+2. **6 paires AFFINITES seulement** — couverture trop faible, simulation démarre "froide"
+3. **Click-to-select depuis info-panel non branché** — `data-id` généré mais aucun listener
+4. **`successCounts` dead code dans `save()`** — grossit inutilement le snapshot
+5. **Inconsistance sémantique `introFactor`** — mineur, toujours présent
+6. **Pas de type de projet REPOS/RETRAIT** — les introvertis saturés n'ont aucun projet "adapté" à leur état CONCENTRE
 
 ---
 
 ## Bugs / régressions détectés
 
-### B1 — `_renderFriendshipLinks` : O(n²) non-caché à chaque frame render
-**simulation.js ~L1780** — La "passe cœur rapproché" (amis forts côte à côte, dist < INTERACTION_RADIUS) refait le O(n²) complet à chaque frame render, en parallèle du cache `_activeFriendLinks`. Pour 12 entités = 66 paires/frame, ce n'est pas critique mais c'est incohérent avec l'architecture cache établie.
+### B1 — `_renderRecruitLinks` : O(n²) non-caché (non corrigé du tour précédent)
+**simulation.js ~L1720** — Double boucle `entities × entities` à chaque frame render.  
+Avec 12 entités = 66 paires × ~60fps = ~4000 itérations/s inutiles.  
+Le cache `_activeFriendLinks` / `_activeRancorLinks` est le pattern établi — il suffit de l'appliquer.
 
-```
-_renderFriendshipLinks > "passe cœur rapproché" — O(n²) non-caché
-```
+### B2 — Double stockage `successCounts` dans le snapshot (non corrigé)
+**simulation.js `save()`** — `successCounts: Object.fromEntries(...)` est inclus au niveau top-level du snapshot mais jamais lu dans `load()`. Dead code qui grossit le localStorage. Fix trivial : supprimer la ligne.
 
-### B2 — `_renderRecruitLinks` : O(n²) non-caché dans le render
-**simulation.js ~L1720** — Contrairement aux liens d'amitié et de rancœur qui utilisent des caches, les liens de recrutement recalculent tout depuis zéro à chaque frame. Peut devenir coûteux avec beaucoup d'entités en PROJET simultanément.
+### B3 — Légende des affinités dans index.html ne reflète pas la réalité
+**index.html ~L50** — La légende AFFINITES est statiquement générée depuis `AFFINITES` array. Si on ajoute des paires, la légende se met à jour automatiquement. OK — pas de bug, juste à confirmer.
 
-### B3 — Double stockage `successCount` dans le snapshot
-**simulation.js `save()`** — `successCounts: Object.fromEntries(...)` est inclus dans le snapshot top-level mais n'est jamais utilisé dans `load()`. La restauration se fait via `e.fromSnapshot(eSnap)` qui lit `snap.successCount`. Le champ `successCounts` top-level est du dead code qui grossit inutilement le localStorage.
+### B4 — `infoPanel.addEventListener('click')` manquant (feature incomplète)
+**index.html après `sim.start()`** — `data-id` généré dans `_updatePanel` mais aucun handler. UX dégradée : l'utilisateur voit les entités dans le panel mais ne peut pas cliquer dessus pour les inspecter.
 
-### B4 — Inconsistance sémantique `introFactor` (mineur, non-critique)
-**simulation.js ~L350 et L356** — Le gain de charge sociale et le decay nocturne utilisent tous deux `1 - e.character.socialite`, mais les entités dites "introvertis" dans le jeu sont définies par `extraversion` faible (LD, GD, IM ont extraversion 0.10-0.20). La corrélation est approximative — LD a socialite=0.20 ET extraversion=0.20, donc ça marche en pratique, mais c'est sémantiquement fragile.
+### B5 — `entity-row` manque `cursor: pointer` (CSS)
+**style.css, `.entity-row`** — Sans curseur pointer, l'utilisateur n'a aucun feedback visuel que les lignes du panel sont cliquables.
 
 ---
 
 ## Perf
 
 **Budget frame actuel estimé :**
-- `_update` (12 entités, boucle O(n²) interactions) : ~3-6ms
-- `_render` (Canvas 2D, halos + trails + liens) : ~4-8ms
-- Total : ~7-14ms / 16.6ms cible → marge confortable (~30-55%)
-- Adaptive render skip déclenché si update > 8ms → safety net actif
+- `_update` (12 entités, O(n²) interactions) : ~3-6ms
+- `_render` (Canvas 2D, halos + trails + liens) : ~3-7ms
+- Total : ~6-13ms / 16.6ms cible → marge confortable (~22-64%)
+- Adaptive render skip protège si update > 8ms
 
-**Bottlenecks identifiés :**
-1. `_renderFriendshipLinks` : passe proche-amis O(n²) non-cachée — ~0.3ms/frame gaspillé
-2. `_renderRecruitLinks` : O(n²) non-caché — ~0.2ms/frame supplémentaire
-3. `_thoughtBubbles` : `entities.find` dans la boucle de rendu (O(n)) — négligeable à 12 entités
+**Bottlenecks restants :**
+1. `_renderRecruitLinks` : O(n²) non-caché — ~0.3ms/frame selon nombre d'entités PROJET
+2. `_thoughtBubbles` : `entities.find` dans la boucle de rendu — négligeable à 12 entités
 
-**Optimisation possible :** Ajouter `_activeRecruitLinks` (cache 5×/s) sur le modèle de `_activeFriendLinks`.
+**Après fix `_activeRecruitLinks`** : économie estimée ~0.3ms/frame, budget render → ~2.7-6.7ms.
 
 ---
 
 ## Priorités recommandées pour le prochain tour
 
-### 1. Fix B1+B2 — Cacher `_activeRecruitLinks` et supprimer la passe proche-amis non-cachée
+### 1. Fix B1 — Créer `_activeRecruitLinks` (cache rebuild 5×/s)
 
-**Pourquoi :** Cohérence architecturale + légère économie perf. La passe proche-amis dans `_renderFriendshipLinks` est un cas non géré du cache principal (le cache exclut distSq < INTERACTION_RADIUS). La fix la plus propre : **inclure les proches dans le cache** avec un flag `isClose: true`, et afficher le cœur depuis le cache.
+**Pourquoi :** Report du tour précédent. Cohérence architecturale. O(n²) dans le render loop est une dette technique active.
 
 **Comment :**
-```js
-// Dans _update, rebuild _activeFriendLinks :
-// Supprimer la condition `if (distSq < interactRadSqFL) continue;`
-// Remplacer par : 
-const isClose = distSq < interactRadSqFL;
-const maxDistSq = score >= 40 ? 1200 * 1200 : 700 * 700;
-if (!isClose && distSq > maxDistSq) continue;
-this._activeFriendLinks.push({ a, b, score, strength, isClose });
 
-// Dans _renderFriendshipLinks :
-// Supprimer entièrement la "passe cœur rapproché" (L~1780-1800)
-// Dans la boucle principale, ajouter :
-if (link.isClose && score > 40) { /* afficher cœur */ }
+```js
+// Dans simulation.js, constructor — après _activeRancorLinks:
+this._activeRecruitLinks = [];
+
+// Dans reset() — après _activeRancorLinks:
+this._activeRecruitLinks = [];
+
+// Dans _update, bloc `if (this._friendLinkTimer >= 200)` — après rebuild _activeRancorLinks:
+this._activeRecruitLinks = [];
+for (const recruiter of entities) {
+  if (recruiter.state !== STATE.PROJET) continue;
+  for (const other of entities) {
+    if (other === recruiter || other.state === STATE.PROJET) continue;
+    const aff = recruiter.getAffinityWith(other.id);
+    if (aff < 0.5) continue;
+    const dx = other.x - recruiter.x, dy = other.y - recruiter.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 300) continue;
+    this._activeRecruitLinks.push({ recruiter, other, aff, dist });
+  }
+}
+
+// Dans _renderRecruitLinks — remplacer la double boucle par lecture du cache:
+_renderRecruitLinks(ctx) {
+  if (!this._activeRecruitLinks || this._activeRecruitLinks.length === 0) return;
+  ctx.save();
+  for (const { recruiter, other, aff, dist } of this._activeRecruitLinks) {
+    const alpha = aff * 0.22 * (1 - dist / 300);
+    ctx.beginPath();
+    ctx.moveTo(recruiter.x, recruiter.y);
+    ctx.lineTo(other.x, other.y);
+    ctx.strokeStyle = `rgba(255,215,0,${alpha.toFixed(3)})`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
 ```
 
-Pour `_activeRecruitLinks` : créer le cache dans le rebuild de `_friendLinkTimer` (même cadence), remplir depuis les entités STATE.PROJET, lire dans `_renderRecruitLinks`.
+### 2. Fix B4+B5 — Brancher click-to-select depuis info-panel + CSS cursor
 
-### 2. Enrichissement AFFINITES — ajouter 8 paires prédéfinies
+**Pourquoi :** UX manquante flagrante. `data-id` est déjà généré — il manque juste l'event listener. 5 lignes de code, impact UX immédiat : l'utilisateur peut cliquer sur une ligne du panel latéral pour inspecter l'entité.
 
-**Pourquoi :** 6 paires pour 12 entités = couverture de 9% seulement. Les premières minutes de simulation sont peu lisibles (peu de liens définis, tout dépend de l'accumulation dynamique). Impact visuel immédiat sur le démarrage.
+**Comment :**
 
-**Comment :** Ajouter dans `entities.js` (après les 6 existantes) :
 ```js
-// Paires négatives (faible affinité = tension latente)
-['ER',  'LD',  0.15],  // Agressif vs Solitaire-pacifique : friction naturelle
-['FT',  'GD',  0.10],  // Hyperactif vs Prudent-introverti : incompatibles
-['ER',  'IM',  0.20],  // Agressif vs Introspectif-sensible
-// Paires positives supplémentaires
-['JG',  'IM',  0.78],  // Deux curieux introvertis : affinité intellectuelle
-['CM',  'SB',  0.82],  // Médiateur + Sociable : alliance naturelle
-['TR',  'JC',  0.72],  // Deux extravertis curieux : énergie partagée
-['LPL', 'SB',  0.70],  // Deux jovials sociables
-['GD',  'AM',  0.65],  // Introvertis prudents : connexion discrète
-```
-
-### 3. Brancher `data-id` dans info-panel → click-to-select depuis la sidebar
-
-**Pourquoi :** Le HTML génère déjà `data-id` sur chaque `.entity-row` mais il n'y a aucun event listener. C'est une UX manquante flagrante — l'utilisateur voit les entités dans le panel et ne peut pas cliquer dessus pour les inspecter (doit cliquer directement sur le canvas).
-
-**Comment** (dans `index.html`, après `sim.start()`) :
-```js
+// Dans index.html, APRÈS sim.start() :
 infoPanel.addEventListener('click', (ev) => {
   const row = ev.target.closest('[data-id]');
   if (!row) return;
-  const id = row.dataset.id;
-  const entity = sim.entities.find(e => e.id === id);
-  if (entity) {
-    sim.selectedEntity = (sim.selectedEntity === entity) ? null : entity;
-  }
+  const entity = sim.entities.find(e => e.id === row.dataset.id);
+  if (entity) sim.selectedEntity = (sim.selectedEntity === entity) ? null : entity;
 });
 ```
 
-**CSS** — ajouter `cursor: pointer` sur `.entity-row` dans `style.css`.
+```css
+/* Dans style.css, ajouter dans .entity-row : */
+cursor: pointer;
+```
+
+### 3. Enrichir AFFINITES — ajouter 8 paires ciblées (4 positives + 4 négatives/neutres)
+
+**Pourquoi :** 6 paires pour 12 entités = 9% de couverture. Les premières minutes sont "mortes" (peu de liens visibles, tout dépend de l'accumulation lente). Impact visuel immédiat sur le démarrage. Coût : 8 lignes dans entities.js.
+
+**Paires recommandées :**
+```js
+// Positives
+['JG',  'IM',  0.78],  // Deux curieux introvertis : affinité intellectuelle forte
+['CM',  'SB',  0.82],  // Médiateur + Sociable : alliance naturelle évidente
+['TR',  'JC',  0.72],  // Deux extravertis curieux : énergie partagée
+['LPL', 'SB',  0.70],  // Deux jovials sociables : bonne compagnie
+
+// Négatives (friction latente)
+['ER',  'LD',  0.15],  // Agressif vs Solitaire-pacifique : friction naturelle
+['FT',  'GD',  0.10],  // Hyperactif vs Prudent-introverti : incompatibles
+['ER',  'IM',  0.20],  // Agressif vs Introspectif-sensible
+['FT',  'IM',  0.18],  // Hyperactif vs Introverti silencieux
+```
+
+**Note :** L'ajout de paires négatives (<0.3) n'impacte pas les liens d'amitié (threshold = 8 interactionLog) mais influence les forces d'attraction/répulsion sociale dès le début, rendant les séparations de groupes plus lisibles.
 
 ---
 
 ## Contraintes à respecter
 
-- `SAVE_KEY = 'haize_save_v1'` — ne pas changer, ne pas toucher au format save
+- `SAVE_KEY = 'haize_save_v1'` — ne pas changer
 - FSM 9 états — stable, ne pas refactorer `_updateState`
 - `PROJECT_MAX = 3`, 12 entités, `ENTITY_DEFS` — structures immuables
 - Ne pas toucher à `Heatmap`
 - Ne pas introduire de `async` dans la boucle de rendu
-- `_activeFriendLinks` structure `{ a, b, score, strength }` — étendre uniquement (ajouter `isClose`)
-- `_activeRancorLinks` structure `{ a, b, count, dist }` — stable
+- `_activeFriendLinks` structure `{ a, b, score, strength, isClose }` — stable (isClose ajouté au tour précédent)
 - Conserver backward compat des snapshots localStorage
+- **Ne pas casser** le signal 📡 throttlé par paire dans `_update` (recrutement physique) — le cache `_activeRecruitLinks` n'affecte que le rendu, pas la physique
 
 ---
 
 ## Code à écrire (extraits clés)
 
-### Fix B3 — Supprimer `successCounts` du snapshot top-level (simulation.js `save()`)
+### Fix B2 — Supprimer `successCounts` dead code dans `save()`
 ```js
-// Retirer cette ligne de save() :
+// Retirer de simulation.js save() — les 3 lignes suivantes :
 successCounts: Object.fromEntries(
   this.entities.map(e => [e.id, e.successCount])
 ),
-// Le successCount est déjà dans entity.toSnapshot() → load via fromSnapshot()
+// successCount est déjà dans entity.toSnapshot() → restauré via fromSnapshot()
 ```
 
-### Cache _activeRecruitLinks (simulation.js, dans le bloc `_friendLinkTimer >= 200`)
+### Initialiser `_activeRecruitLinks` dans constructor
 ```js
-// Ajouter après rebuild _activeRancorLinks :
+// Après la ligne `this._activeRancorLinks = [];` dans constructor :
+this._activeRecruitLinks = [];
+```
+
+### Ajouter dans reset()
+```js
+// Après `this._activeRancorLinks = [];` dans reset() :
+this._activeRecruitLinks = [];
+```
+
+### Rebuild dans `_update` (bloc `_friendLinkTimer >= 200`)
+```js
+// À la fin du bloc if (_friendLinkTimer >= 200), après rebuild _activeRancorLinks :
+// Cache liens de recrutement (5×/s, comme friend/rancor)
 this._activeRecruitLinks = [];
 for (const recruiter of entities) {
   if (recruiter.state !== STATE.PROJET) continue;
@@ -168,19 +214,22 @@ for (const recruiter of entities) {
 }
 ```
 
-### Initialiser `_activeRecruitLinks` dans constructor et reset()
+### `_renderRecruitLinks` — remplacer la double boucle
 ```js
-this._activeRecruitLinks = []; // dans constructor (ligne ~constructor)
-// Et dans reset() :
-this._activeRecruitLinks = [];
-```
-
-### Brancher info-panel (index.html, après `sim.start()`)
-```js
-infoPanel.addEventListener('click', (ev) => {
-  const row = ev.target.closest('[data-id]');
-  if (!row) return;
-  const entity = sim.entities.find(e => e.id === row.dataset.id);
-  if (entity) sim.selectedEntity = (sim.selectedEntity === entity) ? null : entity;
-});
+_renderRecruitLinks(ctx) {
+  if (!this._activeRecruitLinks || this._activeRecruitLinks.length === 0) return;
+  ctx.save();
+  for (const { recruiter, other, aff, dist } of this._activeRecruitLinks) {
+    const alpha = aff * 0.22 * (1 - dist / 300);
+    ctx.beginPath();
+    ctx.moveTo(recruiter.x, recruiter.y);
+    ctx.lineTo(other.x, other.y);
+    ctx.strokeStyle = `rgba(255,215,0,${alpha.toFixed(3)})`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
 ```

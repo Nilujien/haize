@@ -155,6 +155,40 @@ const GLOBAL_EVENTS = [
     // Réinitialiser entre les déclenchements
     reset() { this._initialized = false; this._patientZero = null; },
   },
+  {
+    type: 'EUPHORIE',
+    label: '🌈 Euphorie Contagieuse',
+    color: '#ffd700',
+    duration: 18000,
+    description: 'Un sourire se propage — l\'euphorie gagne tout le monde',
+    _initialized: false,
+    _sourceEntity: null,
+    apply(entities, dt) {
+      if (!this._initialized) {
+        this._initialized = true;
+        // Source : entité la plus heureuse (ou aléatoire si toutes négatives)
+        this._sourceEntity = entities.reduce((best, e) =>
+          e.mood > best.mood ? e : best, entities[0]);
+        this._sourceEntity.mood = 1.0;
+      }
+      // Propagation : tire vers la humeur la plus haute dans le rayon
+      for (let i = 0; i < entities.length; i++) {
+        for (let j = i + 1; j < entities.length; j++) {
+          const a = entities[i], b = entities[j];
+          const dist = Math.hypot(a.x - b.x, a.y - b.y);
+          if (dist < 100) {
+            const spreadRate = 0.0003 * dt * (1 - dist / 100);
+            if (a.mood > b.mood) {
+              b.mood = Math.min(1, b.mood + spreadRate * Math.abs(a.mood - b.mood));
+            } else {
+              a.mood = Math.min(1, a.mood + spreadRate * Math.abs(b.mood - a.mood));
+            }
+          }
+        }
+      }
+    },
+    reset() { this._initialized = false; this._sourceEntity = null; },
+  },
 ];
 
 // ─── Heatmap ──────────────────────────────────────────────────────────────────
@@ -392,6 +426,9 @@ export class Simulation {
     this._activeFriendLinks = []; // [{ a, b, score, strength }]
     this._friendLinkTimer   = 0;
 
+    // ── Timers perturbation CONCENTRÉ (Map pour éviter de polluer this)
+    this._concentrePerturbTimers = new Map();
+
     this._lastTime   = performance.now();
     this._rafId      = null;
 
@@ -451,6 +488,7 @@ export class Simulation {
     this._heatmapRecordTimer = 0;
     this._forgetTimer        = 0;
     this._activeFriendLinks  = [];
+    this._concentrePerturbTimers = new Map();
   }
 
   // ── Clic sur le canvas ─────────────────────────────────────────────────────
@@ -854,6 +892,27 @@ export class Simulation {
         }
 
         {
+          // ── Perturbation CONCENTRÉ : repousse les intrus proches ─────────
+          if (other.state === STATE.CONCENTRE && dist < 75 && e.state !== STATE.PROJET) {
+            const perturbKey = [e.id, other.id].sort().join('-');
+            const nowP = performance.now();
+            const lastPerturb = this._concentrePerturbTimers.get(perturbKey) || 0;
+            // Répulsion légère sur e (l'entité qui dérange other)
+            const pushFactor = (1 - dist / 75) * 0.05;
+            e.vx -= nx2 * pushFactor;
+            e.vy -= ny2 * pushFactor;
+            // Bulle 🤫 throttlée à 5s par paire
+            if (nowP - lastPerturb > 5000) {
+              this._concentrePerturbTimers.set(perturbKey, nowP);
+              this._thoughtBubbles.push({
+                entityId: other.id,
+                x: other.x, y: other.y, radius: other.radius,
+                text: '🤫',
+                born: nowP, life: 2200,
+              });
+            }
+          }
+
           const affinity = e.getAffinityWith(other.id);
           const socialForce = (e.character.socialite + other.character.socialite) / 2;
           const attractBase = socialForce - 0.3;
@@ -1854,6 +1913,26 @@ export class Simulation {
         ctx.textBaseline = 'middle';
         ctx.globalAlpha = alpha * 2;
         ctx.fillText('💛', midX, midY);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // ── Passe cœur rapproché : amis forts côte à côte (dist < INTERACTION_RADIUS)
+    // Le cache exclut les proches (< interactRad), on les gère séparément
+    const pulseCR = 0.5 + Math.sin(now * 0.0015) * 0.2;
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < this.entities.length; i++) {
+      for (let j = i + 1; j < this.entities.length; j++) {
+        const a = this.entities[i], b = this.entities[j];
+        const score2 = ((a.interactionLog[b.id] || 0) + (b.interactionLog[a.id] || 0)) / 2;
+        if (score2 < 40) continue;
+        const dx2 = b.x - a.x, dy2 = b.y - a.y;
+        const dist2 = Math.sqrt(dx2*dx2 + dy2*dy2);
+        if (dist2 >= this.INTERACTION_RADIUS) continue; // géré par le cache principal
+        ctx.globalAlpha = pulseCR;
+        ctx.fillText('💛', (a.x + b.x) / 2, (a.y + b.y) / 2);
         ctx.globalAlpha = 1;
       }
     }

@@ -53,6 +53,7 @@
     <button class="ctrl-btn ctrl-btn--event" id="btn-ev-tension"  title="Déclencher Vague de Tension">⚡</button>
     <button class="ctrl-btn ctrl-btn--event" id="btn-ev-deprime"  title="Déclencher Vague Dépressive">😶</button>
     <button class="ctrl-btn ctrl-btn--event" id="btn-ev-epidemie" title="Déclencher Épidémie d'Humeur">🦠</button>
+    <button class="ctrl-btn ctrl-btn--event" id="btn-ev-euphorie" title="Déclencher Euphorie Contagieuse">🌈</button>
   </div>
 
   <script type="module">
@@ -194,6 +195,7 @@
     document.getElementById('btn-ev-tension').addEventListener('click', () => sim.triggerEvent('TENSION'));
     document.getElementById('btn-ev-deprime').addEventListener('click', () => sim.triggerEvent('DEPRIME'));
     document.getElementById('btn-ev-epidemie').addEventListener('click', () => sim.triggerEvent('EPIDEMIE'));
+    document.getElementById('btn-ev-euphorie').addEventListener('click', () => sim.triggerEvent('EUPHORIE'));
 
     // ── Console événements HTML — pilotée par sim.onConsoleDirty + rAF FPS ──
     const consoleBody = document.getElementById('event-console-body');

@@ -130,7 +130,6 @@ export class Entity {
     this.vy = Math.sin(angle) * speed;
 
     this.energy = 60 + Math.random() * 40;
-    this.social = 30 + Math.random() * 70;
     this.mood   = (Math.random() * 2 - 1) * 0.3;
 
     // Charge sociale : monte quand entouré, descend quand seul
@@ -216,6 +215,9 @@ export class Entity {
       homeY: this.homeY,
       happyZones: this.happyZones.map(z => ({ ...z })),
       avoidZones: this.avoidZones.map(z => ({ ...z })),
+      // B1/B2/B3 : timers d'état critiques
+      _socialLoadTimer: this._socialLoadTimer || 0,
+      _concentreViaP3:  this._concentreViaP3  || false,
     };
   }
 
@@ -235,6 +237,9 @@ export class Entity {
     if (snap.happyZones) this.happyZones = snap.happyZones.map(z => ({ ...z }));
     // avoidZones : optionnel pour backward compat
     if (snap.avoidZones) this.avoidZones = snap.avoidZones.map(z => ({ ...z }));
+    // B1/B2 : timers d'état (optionnels pour backward compat)
+    if (snap._socialLoadTimer !== undefined) this._socialLoadTimer = snap._socialLoadTimer;
+    if (snap._concentreViaP3  !== undefined) this._concentreViaP3  = snap._concentreViaP3;
   }
 }
 

@@ -560,7 +560,20 @@ export class Simulation {
         successCounts: Object.fromEntries(
           this.entities.map(e => [e.id, e.successCount])
         ),
-        conflictCount: { ...this._conflictCount },  // B1 : persister les rancunes
+        conflictCount: { ...this._conflictCount },  // persister les rancunes
+        // B3 : persister les timers d'état euphorique/concentre
+        euphoriqueDurations: Object.fromEntries(
+          this.entities.map(e => [e.id, {
+            dur: e._euphoriqueDuration || 0,
+            cap: e._euphoriqueCap     || 20000,
+          }])
+        ),
+        concentreDurations: Object.fromEntries(
+          this.entities.map(e => [e.id, {
+            dur: e._concentreDuration    || 0,
+            min: e._concentreMinDuration || 4000,
+          }])
+        ),
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
       this._showNotification('💾 Sauvegarde OK', '#2ecc71');
@@ -599,6 +612,20 @@ export class Simulation {
 
       // B1 : restaurer les rancunes
       if (snap.conflictCount) this._conflictCount = { ...snap.conflictCount };
+
+      // B3 : restaurer les durées euphorique/concentre
+      if (snap.euphoriqueDurations) {
+        for (const e of this.entities) {
+          const d = snap.euphoriqueDurations[e.id];
+          if (d) { e._euphoriqueDuration = d.dur; e._euphoriqueCap = d.cap; }
+        }
+      }
+      if (snap.concentreDurations) {
+        for (const e of this.entities) {
+          const d = snap.concentreDurations[e.id];
+          if (d) { e._concentreDuration = d.dur; e._concentreMinDuration = d.min; }
+        }
+      }
 
       const d = new Date(snap.savedAt);
       const label = `${d.getHours()}h${String(d.getMinutes()).padStart(2,'0')}`;
@@ -1131,10 +1158,6 @@ export class Simulation {
         }
       }
 
-      // Social
-      e.social += (Math.random() - 0.5) * 0.02 * dt;
-      e.social  = Math.max(0, Math.min(100, e.social));
-
       // P3 : timer de charge sociale prolongée (pour introvertis → CONCENTRE contextuel)
       if (e.socialCharge > e.socialSaturationThreshold * 0.7) {
         e._socialLoadTimer = (e._socialLoadTimer || 0) + dt;
@@ -1305,6 +1328,22 @@ export class Simulation {
 
         // Un seul log via pushEvent (fix double-log)
         this.pushEvent(`🌟 Projet "${proj.label}" résolu par ${participantIds || '-'}`, proj.color, 'project');
+
+        // Cascade narrative CELEBRATION : vague de joie pour les entités proches
+        if (proj.type === 'CELEBRATION') {
+          for (const o of this.entities) {
+            if (proj.participants.has(o.id)) continue; // déjà récompensés ci-dessus
+            const d = Math.hypot(o.x - proj.x, o.y - proj.y);
+            if (d < 300) {
+              const proximity = 1 - d / 300;
+              o.mood = Math.min(1, o.mood + 0.15 * proximity);
+              if (proximity > 0.5) {
+                this._spawnFloatingEmoji(o.x, o.y - 10, '🎊');
+              }
+            }
+          }
+          this.pushEvent(`🎊 Vague de joie autour de "${proj.label}"`, proj.color, 'project');
+        }
       }
     }
 

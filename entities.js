@@ -161,6 +161,12 @@ export class Entity {
     // Zones où l'entité a été heureuse (mood > 0.5), biaisent le déplacement en ERRANCE
     this.happyZones = [];       // [{ x, y, score }] — max 5 zones
     this._happyZoneTimer = 0;   // timer avant prochain échantillonnage (ms game time)
+
+    // ── Mémoire des zones à éviter ─────────────────────────────────────────
+    // Zones où l'entité a souffert (mood < -0.5), repoussent légèrement en ERRANCE
+    // Seulement pour les entités peu agressives (les brutes assument les conflits)
+    this.avoidZones = [];       // [{ x, y, score }] — max 5 zones
+    this._avoidZoneTimer = 0;
   }
 
   getAffinityWith(otherId) {
@@ -201,6 +207,7 @@ export class Entity {
       homeX: this.homeX,
       homeY: this.homeY,
       happyZones: this.happyZones.map(z => ({ ...z })),
+      avoidZones: this.avoidZones.map(z => ({ ...z })),
     };
   }
 
@@ -217,6 +224,8 @@ export class Entity {
     if (snap.homeY !== undefined) this.homeY = snap.homeY;
     // happyZones : optionnel pour backward compat avec saves existantes
     if (snap.happyZones) this.happyZones = snap.happyZones.map(z => ({ ...z }));
+    // avoidZones : optionnel pour backward compat
+    if (snap.avoidZones) this.avoidZones = snap.avoidZones.map(z => ({ ...z }));
   }
 }
 

@@ -957,6 +957,37 @@ export class Simulation {
         e.vy += (zdy / zdist) * pull;
       }
 
+      // ── Mémoire des zones à éviter ────────────────────────────────────────
+      // Toutes les 3s, si mood < -0.5, mémoriser les lieux de souffrance (entités pacifiques seulement)
+      e._avoidZoneTimer = (e._avoidZoneTimer || 0) + dt;
+      if (e._avoidZoneTimer > 3000) {
+        e._avoidZoneTimer = 0;
+        if (e.mood < -0.5 && e.character.agression < 0.5) {
+          const nearby = e.avoidZones.find(z => Math.hypot(z.x - e.x, z.y - e.y) < 80);
+          if (nearby) {
+            nearby.score = Math.min(10, nearby.score + 0.5);
+          } else {
+            e.avoidZones.push({ x: e.x, y: e.y, score: 1 });
+            if (e.avoidZones.length > 5) {
+              e.avoidZones.sort((a, b) => b.score - a.score);
+              e.avoidZones.length = 5;
+            }
+          }
+        }
+      }
+      // Biais de répulsion loin des zones évitées (en ERRANCE seulement)
+      if (e.state === STATE.ERRANCE && e.avoidZones.length > 0) {
+        for (const zone of e.avoidZones) {
+          const zdx = e.x - zone.x, zdy = e.y - zone.y;
+          const zdist = Math.hypot(zdx, zdy) || 1;
+          if (zdist < 150) {
+            const repel = 0.01 * (zone.score / 10) * (1 - zdist / 150);
+            e.vx += (zdx / zdist) * repel;
+            e.vy += (zdy / zdist) * repel;
+          }
+        }
+      }
+
       // Social
       e.social += (Math.random() - 0.5) * 0.02 * dt;
       e.social  = Math.max(0, Math.min(100, e.social));
@@ -1404,6 +1435,7 @@ export class Simulation {
     // ── Pré-calculer la hauteur totale ──────────────────────────────────────
     const contacts = e.getTopContacts(3);
     const hasSparkline = e.moodHistory.length > 4;
+    const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
     const SPARKLINE_H = 38; // label(10) + gap(4) + graphe(24)
 
     const PH =
@@ -1421,6 +1453,7 @@ export class Simulation {
       + 11                                    // titre CONTACTS
       + SECTION_GAP
       + Math.max(1, contacts.length) * LINE_H // lignes contacts (min 1 pour "aucun")
+      + (hasZones ? SEP_H * 2 + LINE_H : 0)  // compteur zones heureuses/évitées
       + (hasSparkline ? SEP_H * 2 + SPARKLINE_H : 0)
       + PAD;                                  // bottom pad
 
@@ -1576,6 +1609,21 @@ export class Simulation {
 
         cy += LINE_H;
       }
+    }
+
+    // ── Zones heureuses / évitées ──────────────────────────────────────────
+    const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
+    if (hasZones) {
+      drawSep();
+      ctx.font      = '9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.38)';
+      const zoneParts = [];
+      if (e.happyZones.length > 0)
+        zoneParts.push(`🌟 ${e.happyZones.length} lieu${e.happyZones.length > 1 ? 'x' : ''} heureux`);
+      if (e.avoidZones?.length > 0)
+        zoneParts.push(`⚠️ ${e.avoidZones.length} zone${e.avoidZones.length > 1 ? 's' : ''} évitée${e.avoidZones.length > 1 ? 's' : ''}`);
+      ctx.fillText(zoneParts.join('  '), X, cy + 1);
+      cy += LINE_H;
     }
 
     // ── Sparkline humeur ────────────────────────────────────────────────────
@@ -1862,6 +1910,23 @@ export class Simulation {
           ctx.restore();
         }
       }
+      // Zones à éviter (rouge-brun) — affichées uniquement pour l'entité sélectionnée
+      if (e === this.selectedEntity && e.avoidZones?.length > 0) {
+        for (const zone of e.avoidZones) {
+          const zAlpha = 0.10 + (zone.score / 10) * 0.18;
+          const zR = 12 + (zone.score / 10) * 8;
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, zR, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(231,76,60,${zAlpha.toFixed(2)})`;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(231,76,60,0.7)';
+          ctx.fill();
+          ctx.restore();
+        }
+      }
     }
   }
 
@@ -1875,10 +1940,11 @@ export class Simulation {
       const satPct = Math.min(1, e.socialCharge / 100);
       const satAlpha = satPct * 0.5;
       const haloR = r * (2.2 + Math.sin(performance.now() * 0.003) * 0.3);
-      // Invalider si charge sociale a varié > 5 ou position bougée > 5px
+      // Invalider si charge sociale a varié > 5 ou position bougée > 5px ou haloR a varié > 2px
       if (!e._satGrad
           || Math.abs(e._satGradCharge - e.socialCharge) > 5
-          || Math.hypot(e.x - e._satGradX, e.y - e._satGradY) > 5) {
+          || Math.hypot(e.x - e._satGradX, e.y - e._satGradY) > 5
+          || Math.abs((e._satGradR || 0) - haloR) > 2) {
         e._satGrad = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, haloR);
         e._satGrad.addColorStop(0, `rgba(255,118,117,${satAlpha.toFixed(2)})`);
         e._satGrad.addColorStop(1, 'transparent');

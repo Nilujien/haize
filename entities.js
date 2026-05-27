@@ -156,6 +156,11 @@ export class Entity {
 
     // Historique d'humeur : ring-buffer de 80 valeurs échantillonnées toutes les ~500ms
     this.moodHistory = [];
+
+    // ── Mémoire des lieux heureux ──────────────────────────────────────────
+    // Zones où l'entité a été heureuse (mood > 0.5), biaisent le déplacement en ERRANCE
+    this.happyZones = [];       // [{ x, y, score }] — max 5 zones
+    this._happyZoneTimer = 0;   // timer avant prochain échantillonnage (ms game time)
   }
 
   getAffinityWith(otherId) {
@@ -195,6 +200,7 @@ export class Entity {
       moodHistory: [...this.moodHistory],
       homeX: this.homeX,
       homeY: this.homeY,
+      happyZones: this.happyZones.map(z => ({ ...z })),
     };
   }
 
@@ -209,6 +215,8 @@ export class Entity {
     this.moodHistory  = [...(snap.moodHistory ?? [])];
     if (snap.homeX !== undefined) this.homeX = snap.homeX;
     if (snap.homeY !== undefined) this.homeY = snap.homeY;
+    // happyZones : optionnel pour backward compat avec saves existantes
+    if (snap.happyZones) this.happyZones = snap.happyZones.map(z => ({ ...z }));
   }
 }
 

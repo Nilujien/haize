@@ -929,6 +929,34 @@ export class Simulation {
       e.mood += (Math.random() - 0.5) * 0.0005 * dt;
       e.mood  = Math.max(-1, Math.min(1, e.mood));
 
+      // ── Mémoire des lieux heureux ─────────────────────────────────────
+      // Toutes les 3s de jeu, si l'humeur est bonne, mémoriser la position
+      e._happyZoneTimer = (e._happyZoneTimer || 0) + dt;
+      if (e._happyZoneTimer > 3000 && e.mood > 0.5) {
+        e._happyZoneTimer = 0;
+        const nearby = e.happyZones.find(z => Math.hypot(z.x - e.x, z.y - e.y) < 80);
+        if (nearby) {
+          nearby.score = Math.min(10, nearby.score + 0.5);
+        } else {
+          e.happyZones.push({ x: e.x, y: e.y, score: 1 });
+          if (e.happyZones.length > 5) {
+            e.happyZones.sort((a, b) => b.score - a.score);
+            e.happyZones.length = 5;
+          }
+        }
+      } else if (e._happyZoneTimer > 3000) {
+        e._happyZoneTimer = 0; // reset timer même quand pas heureux
+      }
+      // Biais de déplacement vers la meilleure zone heureuse (en ERRANCE seulement, si déprimé)
+      if (e.state === STATE.ERRANCE && e.happyZones.length > 0 && e.mood < 0) {
+        const best = e.happyZones.reduce((a, b) => a.score > b.score ? a : b);
+        const zdx = best.x - e.x, zdy = best.y - e.y;
+        const zdist = Math.hypot(zdx, zdy) || 1;
+        const pull = 0.015 * (best.score / 10) * (1 - e.mood); // plus fort si déprimé
+        e.vx += (zdx / zdist) * pull;
+        e.vy += (zdy / zdist) * pull;
+      }
+
       // Social
       e.social += (Math.random() - 0.5) * 0.02 * dt;
       e.social  = Math.max(0, Math.min(100, e.social));
@@ -1816,6 +1844,24 @@ export class Simulation {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
+
+      // ── Happy zones : petits glows visibles uniquement pour l'entité sélectionnée
+      if (e === this.selectedEntity && e.happyZones.length > 0) {
+        for (const zone of e.happyZones) {
+          const zAlpha = 0.12 + (zone.score / 10) * 0.25;
+          const zR = 14 + (zone.score / 10) * 10;
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, zR, 0, Math.PI * 2);
+          ctx.fillStyle = e.color + Math.round(zAlpha * 255).toString(16).padStart(2,'0');
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = e.color + 'cc';
+          ctx.fill();
+          ctx.restore();
+        }
+      }
     }
   }
 
@@ -1842,7 +1888,7 @@ export class Simulation {
         e._satGradR = haloR;
       }
       ctx.beginPath();
-      ctx.arc(e.x, e.y, e._satGradR, 0, Math.PI * 2);
+      ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2); // Fix: dessiner le haloR courant (pulse), pas le cached
       ctx.fillStyle = e._satGrad;
       ctx.fill();
     }
@@ -2026,10 +2072,16 @@ export class Simulation {
 
     const r = proj.radius * 0.45 * pulse;
 
-    const gradient = ctx.createRadialGradient(proj.x, proj.y, r * 0.5, proj.x, proj.y, proj.radius * 1.5);
-    gradient.addColorStop(0,   proj.color + '22');
-    gradient.addColorStop(0.5, proj.color + '11');
-    gradient.addColorStop(1,   'transparent');
+    // Cache gradient : invalider seulement si pulse a varié > 0.03 (~gain 0.4ms/frame sur 3 projets)
+    const pulseDelta = Math.abs((proj._lastPulse || 0) - pulse);
+    if (!proj._gradient || pulseDelta > 0.03) {
+      proj._gradient = ctx.createRadialGradient(proj.x, proj.y, r * 0.5, proj.x, proj.y, proj.radius * 1.5);
+      proj._gradient.addColorStop(0,   proj.color + '22');
+      proj._gradient.addColorStop(0.5, proj.color + '11');
+      proj._gradient.addColorStop(1,   'transparent');
+      proj._lastPulse = pulse;
+    }
+    const gradient = proj._gradient;
     ctx.beginPath();
     ctx.arc(proj.x, proj.y, proj.radius * 1.5, 0, Math.PI * 2);
     ctx.fillStyle = gradient;

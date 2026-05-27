@@ -1416,6 +1416,10 @@ export class Simulation {
       if (newState === STATE.CONCENTRE) {
         e._concentreDuration = 0;
         e._concentreMinDuration = 4000 + Math.random() * 3000;
+        e._socialLoadTimer = 0; // B1 : évite ré-entrée immédiate via P3 si timer élevé
+        // D : détecter si c'est une retraite introvertie (P3) ou épuisement physique
+        e._concentreViaP3 = e.character.extraversion < 0.3
+          && (e.socialCharge || 0) > (e.socialSaturationThreshold || 60) * 0.85;
       }
 
       // Nettoyer caches halos de l'état quitté
@@ -1449,7 +1453,8 @@ export class Simulation {
         [STATE.EUPHORIQUE]: 'EUPHORIQUE',
         [STATE.CONCENTRE]:  'CONCENTRÉ',
       };
-      const emoji = stateEmojis[newState];
+      // D : emoji distinctif pour retraite introvertie (P3) vs épuisement physique
+      const emoji = (newState === STATE.CONCENTRE && e._concentreViaP3) ? '🧘' : stateEmojis[newState];
       if (emoji) {
         this._spawnFloatingEmoji(e.x, e.y, emoji);
       }
@@ -1705,6 +1710,14 @@ export class Simulation {
       .filter(([, count]) => count >= 2)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3);
+
+    // C : rancœurs — pré-calculer les paires conflictuelles impliquant e
+    const rancorEntries = Object.entries(this._conflictCount)
+      .filter(([ck]) => ck.split('-').some(id => id === e.id))
+      .map(([ck, count]) => ({ otherId: ck.split('-').find(id => id !== e.id), count }))
+      .filter(x => x.count >= 2)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
     const hasSparkline = e.moodHistory.length > 4;
     const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
     const SPARKLINE_H = 38; // label(10) + gap(4) + graphe(24)
@@ -1725,6 +1738,7 @@ export class Simulation {
       + 11                                    // titre CONTACTS
       + SECTION_GAP
       + Math.max(1, contacts.length) * LINE_H // lignes contacts (min 1 pour "aucun")
+      + (rancorEntries.length > 0 ? SEP_H * 2 + 11 + SECTION_GAP + rancorEntries.length * LINE_H : 0) // C : rancœurs
       + (hasZones ? SEP_H * 2 + LINE_H : 0)  // compteur zones heureuses/évitées
       + (hasSparkline ? SEP_H * 2 + SPARKLINE_H : 0)
       + PAD;                                  // bottom pad
@@ -1897,6 +1911,22 @@ export class Simulation {
         ctx.fillText(score.toFixed(1), px + PW - PAD, cy + 1);
         ctx.textAlign = 'left';
 
+        cy += LINE_H;
+      }
+    }
+
+    // ── Rancœurs ────────────────────────────────────────────────────────────
+    if (rancorEntries.length > 0) {
+      drawSep();
+      ctx.font      = 'bold 9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillText('RANCŒURS', X, cy);
+      cy += 11 + SECTION_GAP;
+      for (const { otherId, count } of rancorEntries) {
+        const isDeep = count >= 5;
+        ctx.font      = '9px monospace';
+        ctx.fillStyle = isDeep ? '#e74c3c' : 'rgba(255,120,100,0.75)';
+        ctx.fillText(`❄️ ${otherId} ×${count}`, X, cy + 1);
         cy += LINE_H;
       }
     }
@@ -2481,7 +2511,7 @@ export class Simulation {
       ctx.font = '13px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('🎯', badgeX, badgeY);
+      ctx.fillText(e._concentreViaP3 ? '🧘' : '🎯', badgeX, badgeY);
       ctx.globalAlpha = 1;
       ctx.restore();
     }

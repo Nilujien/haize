@@ -1,87 +1,196 @@
 # HAIZE — Plan du prochain tour
-_Bilan tour : 27/05/2026 05:18 (cron évolution autonome)_
+_Rédigé le : 27/05/2026 05:43 (cron planification)_
 
 ---
 
-## Bilan du tour actuel
+## Analyse de l'état actuel
 
-### Ce qui a été implémenté
+### Ce qui fonctionne bien
+- Simulation 12 entités stable, comportements différenciés et plausibles
+- Heatmap optimisée (OffscreenCanvas + LUT + dirty flag) — perf correcte
+- Panneau inspect complet : sparkline, contacts, barres traits, zones, charge sociale
+- Events globaux (5 types) bien calibrés
+- Saturation sociale des introvertis cohérente
+- Territorialité et homeWander bien intégrés
+- avoidZones implémentées depuis le dernier tour ✅
 
-1. **🐛 Fix bug #1 — Gradient saturation arc/haloR mismatch**
-   - Ajout de la condition `Math.abs((e._satGradR || 0) - haloR) > 2` à l'invalidation du cache gradient
-   - Le gradient suit maintenant correctement le halo pulsé sans bleed/coupure visible
-
-2. **✨ Feature : avoidZones — Mémoire des conflits**
-   - `entities.js` : Ajout de `avoidZones: []` et `_avoidZoneTimer: 0` dans le constructeur
-   - `entities.js` : Snapshot/restore avec backward compat (optionnel)
-   - `simulation.js` : Logique de mémorisation toutes les 3s (mood < -0.5, agression < 0.5)
-   - `simulation.js` : Biais de répulsion en ERRANCE dans un rayon de 150px
-   - `simulation.js` : Rendu visuel rouge-brun pour l'entité sélectionnée (même pattern que happyZones)
-
-3. **✨ Feature : Compteur de zones dans le panneau inspect**
-   - Ligne `🌟 N lieux heureux  ⚠️ N zones évitées` après les contacts fréquents
-   - `PH` pré-calculé mis à jour (`hasZones` conditionnel)
-
-### Ce qui a été laissé de côté
-- **Bug #3 — Timer `_happyZoneTimer` dupliqué** : Nettoyage cosmétique sans impact fonctionnel. Peut être simplifié au prochain tour si besoin.
-- **Bug #2 — `_satGradR` non initialisé** : Pas de crash possible (guard `|| 0`), pas urgent.
-
-### Observations pour le prochain tour
-- L'impact comportemental des avoidZones sera visible après ~5 min de simulation : les entités pacifiques (JG, LD, GD, IM, AM) devraient progressivement se structurer loin des zones de tension
-- Perf estimée : +0 ms render (pas de nouveau rendu hors selectedEntity), +~0.1ms update (petite boucle max 5 zones)
-- **SAVE_KEY inchangé** — `avoidZones` est optionnel dans `fromSnapshot`, backward compat OK
+### Ce qui pose problème
+- **Bug critique détecté dans `_renderInspectPanel`** : double déclaration `const hasZones` dans la même portée de fonction → SyntaxError en ES module strict (voir bugs)
+- avoidZones et happyZones s'accumulent sans jamais décroître → dérive comportementale longue durée
+- Heatmap accumule très vite (0.12/frame × 12 entités × 60fps → saturation en ~3s) ; la normalisation masque le problème visuellement mais les données perdent leur précision fine
 
 ---
 
-## État actuel du code
+## Bugs / régressions détectés
 
-### Fonctionnalités actives
-- Simulation 12 entités, comportements distincts, territorialité
-- Happy zones (lieux heureux) + Avoid zones (zones de souffrance) — NOUVEAU
-- Heatmap optimisée (OffscreenCanvas + LUT)
-- Panneau inspect : sparkline, contacts, barres traits, compteur zones — NOUVEAU
-- Events globaux : 5 types
-- Saturation sociale bien calibrée
-- Touch support
-- Adaptive render skip
+### 🔴 Bug #1 — CRITIQUE : double `const hasZones` dans `_renderInspectPanel` (simulation.js)
 
-### Perf estimée post-tour
-| Phase     | Estimé   |
-|-----------|----------|
-| `_update` | 2.5–5ms  |
-| `_render` | 3–6ms    |
-| Total     | ~6–9ms   |
+Dans `_renderInspectPanel`, la variable `hasZones` est déclarée deux fois avec `const` dans la même portée de fonction :
+
+- **Ligne ~1** (pré-calcul `PH`) :
+  ```js
+  const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
+  ```
+- **Ligne ~2** (section rendu zones) :
+  ```js
+  const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
+  ```
+
+En ES modules (strict mode), une re-déclaration `const` dans la même portée est une **SyntaxError** qui devrait empêcher le chargement du module. Si la simulation tourne c'est que certains runtimes/navigateurs sont plus permissifs, mais c'est fragile. **À corriger en priorité absolue** — supprimer la seconde déclaration (remplacer `const` par rien, la variable existe déjà).
+
+**Fix** : supprimer la seconde déclaration `const hasZones = ...` dans la section rendu (vers le commentaire `// ── Zones heureuses / évitées`).
+
+### 🟡 Bug #2 — avoidZones et happyZones sans décroissance
+
+Les scores des zones ne décroissent jamais. Sur 10+ minutes de simulation :
+- `happyZones` : toutes zones atteignent score 10 rapidement → entités biaisées vers des points fixes, comportement rigidifié
+- `avoidZones` : idem, les zones deviennent des "murs invisibles" permanents
+
+Conséquence : après ~15 min, les comportements sont dictés par des souvenirs trop anciens et trop forts.
+
+### 🟡 Bug #3 — `_happyZoneTimer` reset dupliqué (cosmétique)
+Déjà documenté au tour précédent. Le reset du timer hors condition `mood > 0.5` est correctement placé, mais la lisibilité du code souffre d'un double-reset apparent. Aucun impact fonctionnel.
+
+---
+
+## Perf
+
+### Budget frame estimé (12 entités, 1080p)
+| Phase     | Estimé      | Commentaire                              |
+|-----------|-------------|------------------------------------------|
+| `_update` | 2.5–5ms     | O(n²)=66 paires, acceptable pour n=12   |
+| `_render` | 3–6ms       | Heatmap dirty = lourd (ImageData plein) |
+| Total     | ~6–10ms     | Dans le budget 16ms à 60fps             |
+
+### Bottleneck potentiel — heatmap record rate
+`heatmap.record()` est appelé pour chaque entité **chaque frame** (+0.12/appel). Avec 12 entités à 60fps, une cellule populaire accumule ~86/s. Le max est 255, atteint en ~3s. La normalisation `invMax` sauve l'affichage mais :
+- Le `_dirty` flag est levé à chaque frame (l'offscreen est rebuildé quasi-systématiquement)
+- Les données perdent leur gradient de nuances (tout est maxé rapidement)
+
+**Amélioration recommandée** : réduire le delta de record (0.12 → 0.04) pour lisser la montée et espacer les `_dirty`. Ou mieux : passer `record()` à un rythme throttlé (toutes les 100ms).
 
 ---
 
 ## Priorités recommandées pour le prochain tour
 
-### 1. 🎨 Décroissance des avoidZones
-Les zones évitées s'accumulent indéfiniment (score monte jusqu'à 10, jamais décroît).
-Ajouter une décroissance lente du score : `zone.score = Math.max(0, zone.score - 0.01 * dt / 1000)` toutes les frames.
-Supprimer les zones avec `score < 0.1`. Donne un caractère "d'oubli progressif" naturel.
+### 1. 🔴 Fix bug critique — supprimer le double `const hasZones`
 
-**Effort** : ~5 min. **Impact** : comportemental + évite l'accumulation à long terme.
+**Fichier** : `simulation.js`, fonction `_renderInspectPanel`
 
-### 2. ✨ Feature : Décroissance des happyZones (même logique)
-Même idée pour les happyZones. Actuellement les scores ne font que monter.
+Trouver la seconde occurrence de :
+```js
+const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
+```
+Et la **supprimer** (la variable existe déjà depuis le bloc de pré-calcul de `PH`).
 
-### 3. ✨ Visualisation globale des zones (heatmap ou overlay discret)
-Actuellement, les zones ne s'affichent que pour l'entité sélectionnée.
-Optionnel : afficher toutes les avoidZones de toutes les entités en mode "carte de tensions" accessible via un bouton toggle.
-**Effort** : ~15 min. **Impact** : très lisible visuellement.
+**Effort** : 30 secondes. **Priorité** : maximale (correctness).
 
-### 4. 🐛 Nettoyage du timer `_happyZoneTimer` dupliqué
-Simplification cosmétique (voir bug #3 du tour précédent).
+---
 
-### 5. 🚀 Optimisation `_renderFriendshipLinks` (si perf dégradée)
-66 paires × `Math.sqrt` systématique. Ajouter un guard `distSq` avant `setLineDash` si perf se dégrade.
+### 2. ✨ Décroissance naturelle des zones mémoire (avoidZones + happyZones)
+
+**Logique** : à chaque update, décroître légèrement les scores de toutes les zones.
+Supprimer les zones dont le score tombe sous 0.1.
+
+**Pseudo-code** (`_update`, après les boucles entités) :
+```js
+// Decay zones mémoire (oubli progressif)
+const ZONE_DECAY = 0.0008; // par ms game time → ~1 unité/20s
+for (const e of entities) {
+  e.happyZones = e.happyZones
+    .map(z => ({ ...z, score: z.score - ZONE_DECAY * dt }))
+    .filter(z => z.score > 0.1);
+  e.avoidZones = e.avoidZones
+    .map(z => ({ ...z, score: z.score - ZONE_DECAY * dt }))
+    .filter(z => z.score > 0.1);
+}
+```
+
+**Impact** : comportements plus dynamiques, entités qui "oublient" et se redéploient. Naturel.
+**Effort** : ~5 min.
+
+---
+
+### 3. ✨ Throttle du heatmap record (perf + précision)
+
+Au lieu d'appeler `heatmap.record()` à chaque frame pour chaque entité, throttler à 100ms :
+
+```js
+// Dans _update, après la boucle entités :
+this._heatmapRecordTimer = (this._heatmapRecordTimer || 0) + dt;
+if (this._heatmapRecordTimer >= 100) {
+  this._heatmapRecordTimer = 0;
+  for (const e of entities) {
+    this.heatmap.record(e.x, e.y);
+  }
+}
+```
+
+Et retirer le `this.heatmap.record(e.x, e.y)` dans la boucle principale.
+
+Résultat : `_dirty` levé ~10×/s au lieu de 60×/s → gain ~1ms/frame sur la heatmap, et meilleure précision des gradients (les cellules montent plus lentement).
+
+**Effort** : ~3 min.
+
+---
+
+### 4. ✨ Indicateur de tendance d'humeur dans le panel info
+
+Dans `_updatePanel()`, ajouter une petite flèche ↑↓ à côté de `😊` selon l'évolution récente de `moodHistory`.
+
+```js
+// Calcul de tendance (3 dernières valeurs)
+const hist = e.moodHistory;
+let trend = '';
+if (hist.length >= 3) {
+  const delta = hist[hist.length - 1] - hist[hist.length - 3];
+  trend = delta > 0.05 ? '↑' : delta < -0.05 ? '↓' : '→';
+}
+```
+
+Afficher : `😊74%↑` dans la liste entités. Très lisible d'un coup d'œil.
+**Effort** : ~5 min.
 
 ---
 
 ## Contraintes à respecter
 - Ne pas toucher aux `AFFINITES` ni aux `ENTITY_DEFS`
-- `SAVE_KEY = 'haize_save_v1'` inchangé
+- `SAVE_KEY = 'haize_save_v1'` inchangé (decay zones doit être backward compat : les zones sans decay restaurées depuis localStorage décroîtront naturellement)
 - Throttle panel à 200ms — maintenir
 - Ne pas modifier la logique `STATE.SATURE`
 - Ne pas augmenter le cap de floating emojis (15)
+- Garder le `onConsoleDirty` callback pattern (index.html côté)
+
+---
+
+## Code à écrire (extraits prêts)
+
+### Fix #1 — supprimer double const (simulation.js ~ligne 956)
+Chercher le pattern exact :
+```js
+    // ── Zones heureuses / évitées ──────────────────────────────────────────
+    const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
+```
+Remplacer par :
+```js
+    // ── Zones heureuses / évitées ──────────────────────────────────────────
+```
+(supprimer la ligne `const hasZones` — la variable est déjà en scope)
+
+### Fix #2 — zone decay (simulation.js, fin de `_update`, après `_thoughtBubbles` cleanup)
+```js
+    // ── Decay zones mémoire (oubli progressif) ─────────────────────────────
+    const ZONE_DECAY_RATE = 0.0008; // ~1 unité toutes les 20s game time
+    for (const e of entities) {
+      if (e.happyZones.length > 0) {
+        e.happyZones = e.happyZones
+          .map(z => ({ ...z, score: z.score - ZONE_DECAY_RATE * dt }))
+          .filter(z => z.score > 0.1);
+      }
+      if (e.avoidZones.length > 0) {
+        e.avoidZones = e.avoidZones
+          .map(z => ({ ...z, score: z.score - ZONE_DECAY_RATE * dt }))
+          .filter(z => z.score > 0.1);
+      }
+    }
+```

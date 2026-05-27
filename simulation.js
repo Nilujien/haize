@@ -1,4 +1,4 @@
-/**
+﻿/**
  * simulation.js
  * Boucle principale, physique, interactions, rendu Canvas.
  *
@@ -586,7 +586,12 @@ export class Simulation {
           this.perfRender = performance.now() - t1;
         }
 
-        this._updatePanel();
+        // Throttle panel DOM update à 200ms (perf)
+        this._panelTimer = (this._panelTimer || 0) + rawDt;
+        if (this._panelTimer >= 200) {
+          this._panelTimer = 0;
+          this._updatePanel();
+        }
       }
       this._rafId = requestAnimationFrame(loop);
     };
@@ -974,6 +979,18 @@ export class Simulation {
       fe.y += fe.vy * dt * 0.05;
       fe.vy -= 0.002 * dt; // montée légère
     }
+
+    // ── Decay interactionLog (oubli progressif, toutes les 30s réelles) ──────
+    this._forgetTimer = (this._forgetTimer || 0) + dt;
+    if (this._forgetTimer > 30000) {
+      this._forgetTimer = 0;
+      for (const e of entities) {
+        for (const id in e.interactionLog) {
+          e.interactionLog[id] = Math.max(0, e.interactionLog[id] * 0.94);
+          if (e.interactionLog[id] < 0.01) delete e.interactionLog[id];
+        }
+      }
+    }
   }
 
   // ── Gestion des projets ───────────────────────────────────────────────────
@@ -1011,15 +1028,7 @@ export class Simulation {
           }
         }
 
-        const entry = {
-          text:      `${proj.label} résolu ! (${participantIds || '—'})`,
-          color:     proj.color,
-          timestamp: performance.now(),
-        };
-        this.eventLog.unshift(entry);
-        if (this.eventLog.length > this.EVENT_LOG_MAX) {
-          this.eventLog.length = this.EVENT_LOG_MAX;
-        }
+        // Un seul log via pushEvent (fix double-log)
         this.pushEvent(`🌟 Projet "${proj.label}" résolu par ${participantIds || '—'}`, proj.color, 'project');
       }
     }
@@ -1957,62 +1966,6 @@ export class Simulation {
     ctx.restore();
   }
 
-  _renderEventLog(ctx, W, H) {
-    const now = performance.now();
-    const LOG_LIFETIME = 12000;
-    const LINE_H = 22;
-    const PAD_X = 16, PAD_Y = 8;
-    const PANEL_W = 360;
-
-    const alive = this.eventLog.filter(e => (now - e.timestamp) < LOG_LIFETIME);
-    if (alive.length === 0) return;
-
-    const PANEL_H = alive.length * LINE_H + PAD_Y * 2;
-    const px = (W - PANEL_W) / 2;
-    const py = H - 80 - PANEL_H;
-
-    ctx.save();
-
-    ctx.fillStyle = 'rgba(5,8,20,0.72)';
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(px, py, PANEL_W, PANEL_H, 8);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = '9px monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText('ÉVÉNEMENTS RÉCENTS', px + PAD_X, py + 4);
-
-    for (let i = 0; i < alive.length; i++) {
-      const entry = alive[i];
-      const age   = now - entry.timestamp;
-      const alpha = Math.max(0.2, 1 - age / LOG_LIFETIME);
-      const lineY = py + PAD_Y + i * LINE_H + 4;
-
-      ctx.beginPath();
-      ctx.arc(px + PAD_X + 5, lineY + 7, 4, 0, Math.PI * 2);
-      ctx.fillStyle = entry.color + Math.round(alpha * 255).toString(16).padStart(2,'0');
-      ctx.fill();
-
-      ctx.fillStyle = `rgba(255,255,255,${(alpha * 0.85).toFixed(2)})`;
-      ctx.font = '10px monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(entry.text, px + PAD_X + 14, lineY + 7);
-
-      ctx.fillStyle = `rgba(255,255,255,${(alpha * 0.35).toFixed(2)})`;
-      ctx.font = '9px monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(`${Math.round(age / 1000)}s`, px + PANEL_W - 8, lineY + 7);
-    }
-
-    ctx.restore();
-  }
-
   _renderProject(ctx, proj) {
     const now   = performance.now();
     const phase = proj._phase + now * 0.002;
@@ -2132,3 +2085,5 @@ export class Simulation {
     this.infoPanel.innerHTML = html;
   }
 }
+
+

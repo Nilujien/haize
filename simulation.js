@@ -1986,14 +1986,25 @@ export class Simulation {
         const barW     = INNER_W - 42 - 24;
         this._drawBar(ctx, barStart, cy + 3, barW, BAR_H - 1, Math.min(1, score / 30), col + '88');
 
-        // Score
+        // Score interaction
         ctx.font      = '9px monospace';
         ctx.fillStyle = 'rgba(255,255,255,0.28)';
         ctx.textAlign = 'right';
         ctx.fillText(score.toFixed(1), px + PW - PAD, cy + 1);
         ctx.textAlign = 'left';
 
-        cy += LINE_H;
+        // Affinité de base — dorée si forte, rouge si faible, grise si neutre
+        if (other && e.getAffinityWith) {
+          const aff = e.getAffinityWith(id);
+          const affPct = Math.round(aff * 100);
+          ctx.font = '8px monospace';
+          ctx.fillStyle = aff >= 0.6 ? '#ffd700'
+                        : aff < 0.3  ? 'rgba(231,76,60,0.75)'
+                        :              'rgba(255,255,255,0.22)';
+          ctx.fillText(`aff:${affPct}%`, X + 12, cy + 10);
+        }
+
+        cy += LINE_H + (other && e.getAffinityWith ? 4 : 0);
       }
     }
 
@@ -2113,8 +2124,7 @@ export class Simulation {
       ctx.beginPath();
       ctx.moveTo(recruiter.x, recruiter.y);
       ctx.lineTo(other.x, other.y);
-      ctx.strokeStyle = 
-gba(255,215,0,);
+      ctx.strokeStyle = `rgba(255,215,0,${alpha.toFixed(3)})`;
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 6]);
       ctx.stroke();
@@ -2467,7 +2477,17 @@ gba(255,215,0,);
       for (let i = 1; i < e.trail.length; i++) {
         ctx.lineTo(e.trail[i].x, e.trail[i].y);
       }
-      ctx.strokeStyle = e.color + '44';
+      // Trail coloré selon état FSM — signal visuel de l'histoire récente
+      const TRAIL_STATE_COLORS = {
+        [STATE.EUPHORIQUE]: '#ffd700',
+        [STATE.CONCENTRE]:  '#74b9ff',
+        [STATE.FUITE]:      '#e74c3c',
+        [STATE.SATURE]:     '#ff7675',
+        [STATE.PROJET]:     '#00cec9',
+        [STATE.SOCIAL]:     '#2ecc71',
+      };
+      const trailColor = (TRAIL_STATE_COLORS[e.state] || e.color) + '55';
+      ctx.strokeStyle = trailColor;
       ctx.lineWidth   = r * 0.6;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';

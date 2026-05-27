@@ -425,6 +425,8 @@ export class Simulation {
     // ── Cache liens d'amitié (rebuild 5×/s dans _update, lu dans _renderFriendshipLinks)
     this._activeFriendLinks = []; // [{ a, b, score, strength }]
     this._friendLinkTimer   = 0;
+    // ── Cache liens de rancœur (rebuild simultané avec friendLinks, lu dans _renderRancorLinks)
+    this._activeRancorLinks = []; // [{ a, b, count, dist }]
 
     // ── Timers perturbation CONCENTRÉ (Map pour éviter de polluer this)
     this._concentrePerturbTimers = new Map();
@@ -496,6 +498,7 @@ export class Simulation {
     this._heatmapRecordTimer = 0;
     this._forgetTimer        = 0;
     this._activeFriendLinks  = [];
+    this._activeRancorLinks  = [];
     this._concentrePerturbTimers = new Map();
     this._recruitTimers      = {};
     this._conflictCount      = {};
@@ -792,6 +795,14 @@ export class Simulation {
         e.socialCharge + chargeGain - chargeLoss
       ));
 
+      // Récupération nocturne : les introvertis en solitude récupèrent plus vite la nuit
+      if (this.isNight && neighbors === 0) {
+        const introFactor = 1 - e.character.socialite;
+        e.socialCharge = Math.max(0,
+          e.socialCharge - 0.025 * dt * (0.3 + introFactor * 0.7)
+        );
+      }
+
       // Bruit de Perlin
       const nx = PERLIN.noise(
         e._noiseOffsetX + e.x * this.NOISE_SCALE,
@@ -806,16 +817,16 @@ export class Simulation {
       e.vx += nx * noiseForce;
       e.vy += ny * noiseForce;
 
-      // Fuite du curseur
+      // Fuite du curseur — les entités en PROJET sont protégées (ne bougent pas)
       const cdx  = e.x - this.mouseX;
       const cdy  = e.y - this.mouseY;
       const cdist = Math.sqrt(cdx * cdx + cdy * cdy) || 1;
-      if (cdist < this.CURSOR_RADIUS) {
+      if (cdist < this.CURSOR_RADIUS && e.state !== STATE.PROJET) {
         const flee = (1 - cdist / this.CURSOR_RADIUS) * 0.35;
         e.vx += (cdx / cdist) * flee;
         e.vy += (cdy / cdist) * flee;
         e.mood = Math.max(-1, e.mood - 0.001 * dt);
-        if (e.state !== STATE.PROJET && e.state !== STATE.SATURE) {
+        if (e.state !== STATE.SATURE) {
           e.state = STATE.FUITE;
           e._stateTimer = 0;
         }
@@ -1191,6 +1202,20 @@ export class Simulation {
           if (distSq > maxDistSq) continue;
           const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
           this._activeFriendLinks.push({ a, b, score, strength });
+        }
+      }
+      // Rebuild cache rancœur (même cadence que friendLinks — 5×/s)
+      this._activeRancorLinks = [];
+      for (let i = 0; i < entities.length; i++) {
+        for (let j = i + 1; j < entities.length; j++) {
+          const a = entities[i], b = entities[j];
+          const ck = [a.id, b.id].sort().join('-');
+          const count = this._conflictCount[ck] || 0;
+          if (count < 3) continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 350) continue;
+          this._activeRancorLinks.push({ a, b, count, dist });
         }
       }
     }
@@ -2090,37 +2115,29 @@ export class Simulation {
 
   // ❄️ Rendu des liens de rancune (conflits répétés)
   _renderRancorLinks(ctx) {
-    const entities = this.entities;
+    if (!this._activeRancorLinks || this._activeRancorLinks.length === 0) return;
     const now = performance.now();
     const pulse = 0.4 + Math.sin(now * 0.002) * 0.3;
     ctx.save();
     ctx.font = '11px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (let i = 0; i < entities.length; i++) {
-      for (let j = i + 1; j < entities.length; j++) {
-        const a = entities[i], b = entities[j];
-        const ck = [a.id, b.id].sort().join('-');
-        const count = this._conflictCount[ck] || 0;
-        if (count < 3) continue;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 350) continue;
-        const intensity = Math.min(1, count / 8);
-        const alpha = intensity * pulse * 0.5;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = `rgba(180,60,60,${alpha.toFixed(3)})`;
-        ctx.lineWidth = 1 + intensity;
-        ctx.setLineDash([2, 5]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        // Icône ❄️ entre les deux
-        ctx.globalAlpha = intensity * 0.75;
-        ctx.fillText('❄️', (a.x + b.x) / 2, (a.y + b.y) / 2);
-        ctx.globalAlpha = 1;
-      }
+    for (const { a, b, count } of this._activeRancorLinks) {
+      const intensity = Math.min(1, count / 8);
+      const alpha = intensity * pulse * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = `rgba(180,60,60,${alpha.toFixed(3)})`;
+      ctx.lineWidth = 1 + intensity;
+      ctx.setLineDash([2, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Icône ❄️ au centre — badge ×N si rancœur intense (≥5)
+      ctx.globalAlpha = intensity * 0.75;
+      const label = count >= 5 ? `❄️×${count}` : '❄️';
+      ctx.fillText(label, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      ctx.globalAlpha = 1;
     }
     ctx.restore();
   }

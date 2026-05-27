@@ -1,184 +1,75 @@
 # HAIZE — Plan du prochain tour
-_Rédigé le : 27/05/2026 15:03 (analyse pré-tour autonome)_
+_Rédigé le : 27/05/2026 16:03 (bilan post-tour autonome)_
 
 ---
 
-## Analyse de l'état actuel
+## Bilan du tour courant
 
-### Ce qui fonctionne bien
-- Architecture solide, aucune régression visible depuis le tour précédent
-- Système rancune (`_conflictCount` + malus affinité) bien intégré dans la physique et le rendu
-- `_projectHistory` + bonus expérience en place et fonctionnel
-- Fix recrutement PROJET (projet le plus proche) correct
-- Budget perf confortable : update ~3-5ms, render ~5-8ms → marge ~8ms sur 60fps
-- Heatmap offscreen + LUT très efficace
-- Cache liens d'amitié rebuild 5×/s : bon pattern
-- FSM des états bien structurée, transitions propres
+### Implémenté
 
-### Observations générales
-Le code est propre et bien commenté. Le tour précédent a consolidé la profondeur comportementale (rancune, expérience, recrutement ciblé). Il reste 3 petites dettes techniques triviales à solder, et une feature comportementale intéressante à explorer.
+**B1 — `_conflictCount` persisté dans save/load**
+- `save()` : snapshot inclut `conflictCount: { ...this._conflictCount }`
+- `load()` : restauration de `_conflictCount` si présent dans le snapshot
+- Aucun risque de migration (champ optionnel à la lecture, SAVE_KEY inchangé)
 
----
+**B2 — `_panelStateHash` sans le flag `selectedEntity`**
+- Supprimé `:${e === this.selectedEntity ? 1 : 0}` du hash
+- Résultat : plus de rebuild DOM inutile au clic sur entité
 
-## Bugs / régressions détectés
+**B3 — Mutation d'objet dans le reduce de recrutement**
+- Remplacé le `.reduce()` avec `p._rdist = d` par une simple boucle `for...of` sans mutation
+- Code plus propre et robuste
 
-### B1 — `_conflictCount` non persisté (simulation.js : méthodes `save()` / `load()`)
-**Impact : moyen.** Les rancunes disparaissent au rechargement. Le snapshot sauvegarde `interactionLog`, `_projectHistory`, `happyZones`, etc. mais oublie `_conflictCount`.
-```js
-// Dans save() → ajouter dans snapshot :
-conflictCount: { ...this._conflictCount },
+**P1 — Badge expérience dans le panneau inspect**
+- `expEntries` calculé en début de `_renderInspectPanel` (réutilisé dans PH + rendu)
+- Hauteur PH mise à jour pour inclure la section EXPÉRIENCE si présente
+- Section rendue entre CARACTÈRE et CONTACTS : `⭐ TYPE ×N` (doré si count ≥ 5)
+- Limité à 3 types max, seuil minimum 2 projets réalisés
 
-// Dans load() → restaurer après la boucle entities :
-if (snap.conflictCount) this._conflictCount = { ...snap.conflictCount };
-```
-Aucun risque de migration (SAVE_KEY inchangé, le champ est optionnel à la lecture).
-
-### B2 — `_panelStateHash` inclut le flag selectedEntity (simulation.js ~ligne 1764)
-**Impact : mineur mais récurrent.** À chaque clic sur une entité, le DOM du panel info est entièrement rebuilé même si les stats n'ont pas changé. Le panneau inspect est rendu sur Canvas — le DOM rebuild est inutile dans ce cas.
-```js
-// Ligne actuelle :
-`${e.id}:${e.state}:${Math.round(e.mood * 10)}:${Math.round(e.energy)}:${e === this.selectedEntity ? 1 : 0}`
-// Corriger en supprimant le dernier fragment :
-`${e.id}:${e.state}:${Math.round(e.mood * 10)}:${Math.round(e.energy)}`
-```
-
-### B3 — Mutation d'objet dans le `.reduce()` de recrutement (simulation.js ~ligne 885)
-**Impact : faible mais code smell.** `p._rdist = d` modifie l'objet `Project` en cours de reduce. Aucun bug visible à 12 entités, mais c'est fragile.
-```js
-// Remplacer par :
-const proj = (() => {
-  let closest = null, closestDist = Infinity;
-  for (const p of this.projects) {
-    if (p.resolved || p.isExpired) continue;
-    const d = Math.hypot(p.x - recruiter.x, p.y - recruiter.y);
-    if (d < p.radius && d < closestDist) { closest = p; closestDist = d; }
-  }
-  return closest;
-})();
-```
+**P3 — CONCENTRE contextuel pour introvertis saturés**
+- `_socialLoadTimer` mis à jour dans la boucle `_update` (montée si charge > 70% seuil, descente si < 70%)
+- Dans `_updateState` : nouvel edge case → si extraversion < 0.3, charge > 85% seuil ET timer > 25s → newState = CONCENTRE
+- SATURE reste prioritaire (condition insérée après le bloc SATURE)
+- `_concentreMinDuration` protège contre les oscillations (déjà en place)
 
 ---
 
-## Perf
+## Laissé de côté
 
-- **Update budget estimé :** ~3-5ms (O(n²) = 66 paires, toutes opérations légères)
-- **Render budget estimé :** ~5-8ms (12 gradients cachés, offscreen heatmap, 66 lignes connexion)
-- **Total frame :** ~10-13ms → ~4-7ms de marge avant d'atteindre 16.7ms (60fps)
-- **Pas de bottleneck critique** dans l'état actuel
-- Seul point à surveiller : `_renderFriendshipLinks` contient une double boucle O(n²) _supplémentaire_ pour les "amis rapprochés" (la passe cœurs côte à côte), non couverte par le cache. Pour n=12 c'est 66 paires, négligeable — mais à ne pas dupliquer si on ajoute des features de rendu.
+Rien de reporté — toutes les priorités P1+P2+P3 ont été traitées dans ce tour.
 
 ---
 
-## Priorités recommandées pour le prochain tour
+## Observations pour le prochain tour
 
-### P1 — Badge expérience dans le panneau inspect (entities.js display + simulation.js `_renderInspectPanel`)
-**Impact visuel fort, effort minimal (~20 lignes), 0 risque.**
-Les entités vétéranes ont un `_projectHistory` rempli depuis 2 tours — il est invisible. Afficher un badge `⭐TYPE (×N)` dans la section CARACTÈRE ou CONTACTS du panneau inspect récompense visuellement la profondeur comportementale déjà implémentée.
+### Perf
+- Toujours aucun bottleneck. Budget estimé inchangé : update ~3-5ms, render ~5-8ms.
+- P3 ajoute une opération dt par entité par frame (négligeable).
+- P1 ajoute ~3-7 fillText par frame si une entité est sélectionnée (négligeable).
 
-Implémentation :
-```js
-// Dans _renderInspectPanel, après la section CARACTÈRE :
-const expEntries = Object.entries(e._projectHistory || {})
-  .filter(([, count]) => count >= 2)
-  .sort((a, b) => b[1] - a[1]);
-if (expEntries.length > 0) {
-  drawSep();
-  ctx.font = 'bold 9px monospace';
-  ctx.fillStyle = 'rgba(255,255,255,0.45)';
-  ctx.fillText('EXPÉRIENCE', X, cy);
-  cy += 11 + SECTION_GAP;
-  for (const [type, count] of expEntries) {
-    ctx.font = '9px monospace';
-    ctx.fillStyle = count >= 5 ? '#ffd700' : 'rgba(255,255,255,0.55)';
-    ctx.fillText(`⭐ ${type} ×${count}`, X, cy + 1);
-    cy += LINE_H;
-  }
-}
-// ⚠️ Penser à ajouter la hauteur de cette section dans le calcul de PH en haut de la fonction
-```
+### Idées pour le prochain tour
 
-### P2 — Fixes B1 + B2 + B3 (corrections techniques rapides)
-**Impact : cohérence + perf marginale. Effort : ~15 lignes total. 0 risque.**
-- Persister `_conflictCount` (B1) : 2 lignes dans `save()`, 1 ligne dans `load()`
-- Fix stateHash (B2) : 1 ligne dans `_updatePanel`
-- Fix mutation reduce (B3) : remplacer ~5 lignes
+**A — Émoji réaction au badge expérience**
+Quand une entité atteint le seuil vétéran (count ≥ 5 sur un type), spawner un `⭐` flottant. Signal visuel de progression.
 
-Ces 3 corrections peuvent être groupées dans un seul commit propre.
+**B — Persistance `_socialLoadTimer` dans save/load**
+Ce timer vient d'être ajouté et n'est pas encore sauvegardé. Impact faible (le timer se reconstruit en 25s), mais cohérent avec la philosophie B1.
 
-### P3 — CONCENTRE contextuel pour introvertis saturés (simulation.js `_updateState`)
-**Impact comportemental notable. Effort : ~15 lignes. Risque : modéré (FSM), tester soigneusement.**
+**C — Visualisation des conflits dans le panneau inspect**
+`_conflictCount` est maintenant persisté — il pourrait apparaître dans le panneau inspect. Ex : section RANCŒURS avec les entités conflictuelles et un compteur.
 
-Actuellement CONCENTRE n'est accessible que si `energy < 20`. Les introvertis (extraversion < 0.3) devraient pouvoir entrer en CONCENTRE après une longue surcharge sociale même avec de l'énergie, comme une retraite volontaire.
+**D — Événement "RETRAITE" lié à P3**
+Quand une entité entre en CONCENTRE via la retraite introvertie (P3), spawner un emoji différent (ex: 🌿 ou 🧘) plutôt que 🎯 pour distinguer les deux chemins vers CONCENTRE.
 
-Condition proposée :
-```js
-// Dans _updateState, avant le bloc energy < 20 :
-const isIntrovert = e.character.extraversion < 0.3;
-const sociallyOverloaded = e.socialCharge > e.socialSaturationThreshold * 0.85;
-const socialLoadedLong = (e._socialLoadTimer || 0) > 25000; // 25s de charge haute
-if (isIntrovert && sociallyOverloaded && socialLoadedLong && e.state !== STATE.SATURE && e.state !== STATE.PROJET) {
-  newState = STATE.CONCENTRE;
-}
-// Dans _update, mettre à jour _socialLoadTimer :
-e._socialLoadTimer = e.socialCharge > e.socialSaturationThreshold * 0.7
-  ? (e._socialLoadTimer || 0) + dt
-  : Math.max(0, (e._socialLoadTimer || 0) - dt * 2);
-```
-⚠️ Vérifier que CONCENTRE ne bloque pas SATURE (SATURE doit rester prioritaire → vérifier l'ordre des conditions dans `_updateState`). Le plancher `_concentreMinDuration` déjà en place protège contre les oscillations.
+**E — `_socialLoadTimer` reset à l'entrée CONCENTRE**
+Pour éviter qu'une entité oscille trop vite en/hors CONCENTRE via P3, reset `e._socialLoadTimer = 0` lors de la transition vers CONCENTRE.
 
 ---
 
 ## Contraintes à respecter
 
-- **Ne pas changer SAVE_KEY** — sauf si migration nécessaire (ce n'est pas le cas ici, les nouveaux champs sont optionnels)
-- **Ne pas refactorer la FSM globalement** — modifier `_updateState` chirurgicalement seulement
+- **Ne pas changer SAVE_KEY**
+- **Ne pas refactorer la FSM globalement**
 - **PROJECT_MAX = 3, ENTITY_DEFS, AFFINITES** — inchangés
-- **Ne pas toucher à la Heatmap** — fonctionnelle et optimisée, rien à gagner
-- **Calcul PH dans `_renderInspectPanel`** — si on ajoute une section, mettre à jour le calcul de hauteur totale (en haut de la fonction, ~ligne 1620) sinon le fond du panneau sera trop court
-
----
-
-## Code à écrire (ébauche principale — P1)
-
-```js
-// simulation.js — _renderInspectPanel
-// Après la section CARACTÈRE (après les 2 lignes de traits), avant drawSep() CONTACTS :
-
-const expEntries = Object.entries(e._projectHistory || {})
-  .filter(([, count]) => count >= 2)
-  .sort((a, b) => b[1] - a[1])
-  .slice(0, 3); // max 3 types affichés
-
-if (expEntries.length > 0) {
-  drawSep();
-  ctx.font = 'bold 9px monospace';
-  ctx.fillStyle = 'rgba(255,255,255,0.45)';
-  ctx.fillText('EXPÉRIENCE', X, cy);
-  cy += 11 + SECTION_GAP;
-
-  for (const [type, count] of expEntries) {
-    const isVet = count >= 5;
-    ctx.font = '9px monospace';
-    ctx.fillStyle = isVet ? '#ffd700' : 'rgba(255,200,100,0.65)';
-    const stars = isVet ? '⭐⭐' : '⭐';
-    ctx.fillText(`${stars} ${type} ×${count}`, X, cy + 1);
-    cy += LINE_H;
-  }
-}
-
-// Et dans le calcul de PH initial (ligne ~1630), ajouter :
-// + (expEntries.length > 0 ? SEP_H * 2 + 11 + SECTION_GAP + expEntries.length * LINE_H : 0)
-// Note : calculer expEntries AVANT le bloc de calcul PH (le sortir en variable locale en début de fonction)
-```
-
----
-
-## Ordre d'implémentation recommandé
-
-1. Calculer `expEntries` en tête de `_renderInspectPanel` (variable locale réutilisée dans PH + rendu)
-2. Mettre à jour le calcul `PH`
-3. Ajouter la section rendu entre CARACTÈRE et CONTACTS
-4. Appliquer B1 (save/load `_conflictCount`)
-5. Appliquer B2 (stateHash sans selectedEntity)
-6. Appliquer B3 (fix mutation reduce)
-7. Si budget temps OK : implémenter P3 (CONCENTRE contextuel)
+- **Ne pas toucher à la Heatmap**
+- **Calcul PH dans `_renderInspectPanel`** — si on ajoute une section, mettre à jour la hauteur

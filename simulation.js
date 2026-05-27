@@ -499,6 +499,7 @@ export class Simulation {
     this._forgetTimer        = 0;
     this._activeFriendLinks  = [];
     this._activeRancorLinks  = [];
+    this._activeRecruitLinks = [];
     this._concentrePerturbTimers = new Map();
     this._recruitTimers      = {};
     this._conflictCount      = {};
@@ -1196,12 +1197,15 @@ export class Simulation {
           if (score < this.FRIENDSHIP_THRESHOLD) continue;
           const dx = b.x - a.x, dy = b.y - a.y;
           const distSq = dx * dx + dy * dy;
-          if (distSq < interactRadSqFL) continue;
-          // Exception : amis solides (score ≥ 40) restent liés jusqu'à 1200px
-          const maxDistSq = score >= 40 ? 1200 * 1200 : 700 * 700;
-          if (distSq > maxDistSq) continue;
+          // isClose : amis côte à côte (dist < INTERACTION_RADIUS) — affiche le cœur, pas le lien
+          const isClose = distSq < interactRadSqFL;
+          if (!isClose) {
+            // Exception : amis solides (score ≥ 40) restent liés jusqu'à 1200px
+            const maxDistSq = score >= 40 ? 1200 * 1200 : 700 * 700;
+            if (distSq > maxDistSq) continue;
+          }
           const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
-          this._activeFriendLinks.push({ a, b, score, strength });
+          this._activeFriendLinks.push({ a, b, score, strength, isClose });
         }
       }
       // Rebuild cache rancœur (même cadence que friendLinks — 5×/s)
@@ -1216,6 +1220,20 @@ export class Simulation {
           const dist = Math.hypot(dx, dy);
           if (dist > 350) continue;
           this._activeRancorLinks.push({ a, b, count, dist });
+        }
+      }
+      // Cache liens de recrutement PROJET (5x/s, comme friend/rancor)
+      this._activeRecruitLinks = [];
+      for (const recruiter of entities) {
+        if (recruiter.state !== STATE.PROJET) continue;
+        for (const other of entities) {
+          if (other === recruiter || other.state === STATE.PROJET) continue;
+          const aff = recruiter.getAffinityWith(other.id);
+          if (aff < 0.5) continue;
+          const rdx = other.x - recruiter.x, rdy = other.y - recruiter.y;
+          const rdist = Math.hypot(rdx, rdy);
+          if (rdist > 300) continue;
+          this._activeRecruitLinks.push({ recruiter, other, aff, dist: rdist });
         }
       }
     }
@@ -2088,27 +2106,19 @@ export class Simulation {
   // ── Liens d'amitié persistants ────────────────────────────────────────────
   // 🎯 Rendu des liens de recrutement PROJET
   _renderRecruitLinks(ctx) {
-    const entities = this.entities;
+    if (!this._activeRecruitLinks || this._activeRecruitLinks.length === 0) return;
     ctx.save();
-    for (const e of entities) {
-      if (e.state !== STATE.PROJET) continue;
-      for (const other of entities) {
-        if (other === e || other.state === STATE.PROJET) continue;
-        const aff = e.getAffinityWith(other.id);
-        if (aff < 0.5) continue;
-        const dx = other.x - e.x, dy = other.y - e.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 300) continue;
-        const alpha = aff * 0.22 * (1 - dist / 300);
-        ctx.beginPath();
-        ctx.moveTo(e.x, e.y);
-        ctx.lineTo(other.x, other.y);
-        ctx.strokeStyle = `rgba(255,215,0,${alpha.toFixed(3)})`;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 6]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
+    for (const { recruiter, other, aff, dist } of this._activeRecruitLinks) {
+      const alpha = aff * 0.22 * (1 - dist / 300);
+      ctx.beginPath();
+      ctx.moveTo(recruiter.x, recruiter.y);
+      ctx.lineTo(other.x, other.y);
+      ctx.strokeStyle = 
+gba(255,215,0,);
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
     ctx.restore();
   }

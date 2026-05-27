@@ -103,6 +103,15 @@ export const AFFINITES = [
   ['FT',  'TR',  0.90],
   ['GD',  'IM',  0.70],
   ['LPL', 'JC',  0.65],
+  // Paires ajoutees tour 3 : 4 positives + 4 negatives/friction
+  ['JG',  'IM',  0.78],  // Deux curieux introvertis : affinite intellectuelle forte
+  ['CM',  'SB',  0.82],  // Mediateur + Sociable : alliance naturelle
+  ['TR',  'JC',  0.72],  // Deux extravertis curieux : energie partagee
+  ['LPL', 'SB',  0.70],  // Deux jovials sociables : bonne compagnie
+  ['ER',  'LD',  0.15],  // Agressif vs Solitaire-pacifique : friction naturelle
+  ['FT',  'GD',  0.10],  // Hyperactif vs Prudent-introverti : incompatibles
+  ['ER',  'IM',  0.20],  // Agressif vs Introspectif-sensible
+  ['FT',  'IM',  0.18],  // Hyperactif vs Introverti silencieux
 ];
 
 // ─── Classe Entity ─────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-/* style.css — HAIZE Simulation */
+﻿/* style.css — HAIZE Simulation */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -55,6 +55,7 @@ canvas {
   border-radius: 5px;
   border-left: 2px solid transparent;
   transition: background 0.15s;
+  cursor: pointer;
 }
 .entity-row:hover { background: rgba(255,255,255,0.04); }
 .entity-row--selected {

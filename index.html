@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -100,6 +100,14 @@
     // Simulation
     const sim = new Simulation(canvas, infoPanel);
     sim.start();
+
+    // Click-to-select depuis le panel info lateral (B4)
+    infoPanel.addEventListener('click', (ev) => {
+      const row = ev.target.closest('[data-id]');
+      if (!row) return;
+      const entity = sim.entities.find(e => e.id === row.dataset.id);
+      if (entity) sim.selectedEntity = (sim.selectedEntity === entity) ? null : entity;
+    });
 
     // Tracking curseur (souris) — fuite activée uniquement si Maj maintenue
     canvas.addEventListener('mousemove', (e) => {

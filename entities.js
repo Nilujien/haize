@@ -156,6 +156,10 @@ export class Entity {
     // Mémoire des succès : nombre de projets résolus avec participation de cette entité
     this.successCount = 0;
 
+    // Historique par type de projet : { EXPLORATION: 2, CELEBRATION: 1, ... }
+    // Sert au bonus d'expérience dans _updateProjects
+    this._projectHistory = {};
+
     // Historique d'humeur : ring-buffer de 80 valeurs échantillonnées toutes les ~500ms
     this.moodHistory = [];
 
@@ -171,7 +175,7 @@ export class Entity {
     this._avoidZoneTimer = 0;
   }
 
-  getAffinityWith(otherId) {
+  getAffinityWith(otherId, rancorPenalty = 0) {
     let base = 0;
     for (const [a, b, force] of AFFINITES) {
       if ((a === this.id && b === otherId) ||
@@ -180,7 +184,8 @@ export class Entity {
     // Bonus dynamique : max +0.4 après ~50 unités d'interaction accumulées
     const logScore = this.interactionLog[otherId] || 0;
     const dynamic = Math.min(0.4, logScore / 50);
-    return Math.min(1, base + dynamic);
+    // Malus rancune : pénalise les entités en conflit répété (passé depuis Simulation)
+    return Math.max(0, Math.min(1, base + dynamic - rancorPenalty));
   }
 
   // Retourne les top N entités les plus fréquemment côtoyées
@@ -204,6 +209,7 @@ export class Entity {
       energy: this.energy,
       socialCharge: this.socialCharge,
       successCount: this.successCount,
+      _projectHistory: { ...(this._projectHistory || {}) },
       interactionLog: { ...this.interactionLog },
       moodHistory: [...this.moodHistory],
       homeX: this.homeX,
@@ -220,6 +226,7 @@ export class Entity {
     this.energy       = snap.energy       ?? this.energy;
     this.socialCharge = snap.socialCharge ?? 0;
     this.successCount = snap.successCount ?? 0;
+    if (snap._projectHistory) this._projectHistory = { ...snap._projectHistory };
     this.interactionLog = { ...(snap.interactionLog ?? {}) };
     this.moodHistory  = [...(snap.moodHistory ?? [])];
     if (snap.homeX !== undefined) this.homeX = snap.homeX;

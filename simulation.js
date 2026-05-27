@@ -680,6 +680,11 @@ export class Simulation {
     if (wasNight !== this.isNight) {
       if (this.isNight) {
         this.pushEvent('🌙 La nuit tombe - les entités ralentissent', '#6c88c4', 'cycle');
+        // Decay rancune : oubli naturel au passage jour->nuit
+        for (const key in this._conflictCount) {
+          this._conflictCount[key] = Math.floor(this._conflictCount[key] / 2);
+          if (this._conflictCount[key] <= 0) delete this._conflictCount[key];
+        }
       } else {
         this.dayCount++;
         this.pushEvent(`☀️ Jour ${this.dayCount} - simulation active`, '#f9ca24', 'cycle');
@@ -853,7 +858,10 @@ export class Simulation {
             proj.participants.add(e.id);
             e.state = STATE.PROJET;
             e._stateTimer = 0;
-            const contrib = charAffinity * (e.energy / 100) * 0.012 * dt;
+            // Bonus expérience : vétérans contribuent plus sur leur type de projet (max +50%)
+            const expCount = (e._projectHistory || {})[proj.type] || 0;
+            const experienceBonus = 1 + Math.min(0.5, expCount * 0.1);
+            const contrib = charAffinity * (e.energy / 100) * 0.012 * dt * experienceBonus;
             proj.progress += contrib;
           }
         }
@@ -862,9 +870,13 @@ export class Simulation {
       // 🎯 Recrutement PROJET : attraction implicite des entités affinitaires
       for (const recruiter of entities) {
         if (recruiter.state !== STATE.PROJET) continue;
-        const proj = this.projects.find(p =>
-          !p.resolved && !p.isExpired && Math.hypot(p.x - recruiter.x, p.y - recruiter.y) < p.radius
-        );
+        // Fix P3 : cibler le projet le plus proche de la recruteuse, pas le premier trouvé
+        const proj = this.projects
+          .filter(p => !p.resolved && !p.isExpired && Math.hypot(p.x - recruiter.x, p.y - recruiter.y) < p.radius)
+          .reduce((closest, p) => {
+            const d = Math.hypot(p.x - recruiter.x, p.y - recruiter.y);
+            return (!closest || d < closest._rdist) ? (p._rdist = d, p) : closest;
+          }, null);
         if (!proj) continue;
         let recruitCount = 0;
         const nowR = performance.now();
@@ -957,7 +969,11 @@ export class Simulation {
             }
           }
 
-          const affinity = e.getAffinityWith(other.id);
+          // Malus rancune : entités en conflit répété s'attirent moins
+          const ck960 = [e.id, other.id].sort().join('-');
+          const rancorCount = this._conflictCount[ck960] || 0;
+          const rancorPenalty = Math.min(0.3, rancorCount * 0.04);
+          const affinity = e.getAffinityWith(other.id, rancorPenalty);
           const socialForce = (e.character.socialite + other.character.socialite) / 2;
           const attractBase = socialForce - 0.3;
 
@@ -1262,6 +1278,8 @@ export class Simulation {
             e.mood   = Math.min(1, e.mood + proj.moodReward);
             e.energy = Math.min(100, e.energy + proj.energyReward);
             e.successCount = (e.successCount || 0) + 1;
+            if (!e._projectHistory) e._projectHistory = {};
+            e._projectHistory[proj.type] = (e._projectHistory[proj.type] || 0) + 1;
             if (e.state === STATE.PROJET) {
               e.state = STATE.SOCIAL;
               e._stateTimer = 0;

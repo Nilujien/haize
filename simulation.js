@@ -456,6 +456,10 @@ export class Simulation {
     // 🎯 Recrutement PROJET : timers throttle par paire entité-recruté
     this._recruitTimers = {};
 
+    // 🎭 Micro-événements spontanés : timer de déclenchement (vérification toutes les 2s)
+    this._spontaneousTimer = 0;
+    this.SPONTANEOUS_INTERVAL = 2000; // ms temps réel
+
     // ❄️ Mémoire de rancune : compteur de conflits par paire
     this._conflictCount = {};
     // 🚀 Cache hash panel info (évite DOM rebuild inutile)
@@ -769,6 +773,14 @@ export class Simulation {
     this._noiseTime += dt * this.NOISE_SPEED;
 
     this._updateProjects(dt);
+
+    // 🎭 Micro-événements spontanés (vérification toutes les 2s)
+    this._spontaneousTimer += dt;
+    if (this._spontaneousTimer >= this.SPONTANEOUS_INTERVAL) {
+      this._spontaneousTimer = 0;
+      this._spontaneousEventCheck(entities);
+    }
+
     this.heatmap.decay(dt);
 
     // Réinitialiser compteurs voisins (passe O(n2) avec distSq - pas de sqrt)
@@ -1333,6 +1345,44 @@ export class Simulation {
   }
 
   // ── Gestion des projets ───────────────────────────────────────────────────
+  // ── Micro-événements spontanés ─────────────────────────────────────────────
+  // Appelé toutes les 2s. Déclenche AU PLUS UN événement par vérification.
+  _spontaneousEventCheck(entities) {
+    // 1. Dispute spontanée entre deux ennemis proches (conflictCount >= 4, dist < 120)
+    for (const [ck, count] of Object.entries(this._conflictCount)) {
+      if (count < 4) continue;
+      const [idA, idB] = ck.split('-');
+      const a = entities.find(e => e.id === idA);
+      const b = entities.find(e => e.id === idB);
+      if (!a || !b) continue;
+      const dx = a.x - b.x, dy = a.y - b.y;
+      if (dx * dx + dy * dy > 120 * 120) continue;
+      if (Math.random() > 0.15) continue; // 15% de chance si proches
+      a.mood = Math.max(-1, a.mood - 0.2);
+      b.mood = Math.max(-1, b.mood - 0.2);
+      a.state = STATE.FUITE; a._stateTimer = 0;
+      b.state = STATE.FUITE; b._stateTimer = 0;
+      this._spawnFloatingEmoji((a.x + b.x) / 2, (a.y + b.y) / 2, '💥');
+      this.pushEvent(`💥 Dispute! ${idA} ↔ ${idB} (rancune ×${count})`, '#e74c3c', 'conflict');
+      return; // un seul événement par check
+    }
+
+    // 2. Contagion d'euphorie entre amis proches (score >= 30)
+    for (const { a, b, score } of this._activeFriendLinks) {
+      if (score < 30) continue;
+      const euphoricOne = a.state === STATE.EUPHORIQUE ? a : b.state === STATE.EUPHORIQUE ? b : null;
+      if (!euphoricOne) continue;
+      const other = euphoricOne === a ? b : a;
+      if (other.state === STATE.SATURE || other.state === STATE.CONCENTRE) continue;
+      if (Math.random() > 0.12) continue; // 12% de chance
+      other.mood = Math.min(1, other.mood + 0.25);
+      other.energy = Math.min(100, other.energy + 10);
+      this._spawnFloatingEmoji(other.x, other.y, '✨');
+      this.pushEvent(`✨ ${euphoricOne.id} entraîne ${other.id} dans l'euphorie`, euphoricOne.color, 'social');
+      return;
+    }
+  }
+
   _updateProjects(dt) {
     const W = this.canvas.width, H = this.canvas.height;
 
@@ -2198,24 +2248,16 @@ export class Simulation {
       }
     }
 
-    // ── Passe cœur rapproché : amis forts côte à côte (dist < INTERACTION_RADIUS)
-    // Le cache exclut les proches (< interactRad), on les gère séparément
+    // ── Passe cœur rapproché : utilise le flag isClose du cache (élimine O(n²) inline)
     const pulseCR = 0.5 + Math.sin(now * 0.0015) * 0.2;
     ctx.font = '10px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (let i = 0; i < this.entities.length; i++) {
-      for (let j = i + 1; j < this.entities.length; j++) {
-        const a = this.entities[i], b = this.entities[j];
-        const score2 = ((a.interactionLog[b.id] || 0) + (b.interactionLog[a.id] || 0)) / 2;
-        if (score2 < 40) continue;
-        const dx2 = b.x - a.x, dy2 = b.y - a.y;
-        const dist2 = Math.sqrt(dx2*dx2 + dy2*dy2);
-        if (dist2 >= this.INTERACTION_RADIUS) continue; // géré par le cache principal
-        ctx.globalAlpha = pulseCR;
-        ctx.fillText('💛', (a.x + b.x) / 2, (a.y + b.y) / 2);
-        ctx.globalAlpha = 1;
-      }
+    for (const { a, b, score, isClose } of this._activeFriendLinks) {
+      if (!isClose || score < 40) continue;
+      ctx.globalAlpha = pulseCR;
+      ctx.fillText('💛', (a.x + b.x) / 2, (a.y + b.y) / 2);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -2737,6 +2779,23 @@ export class Simulation {
     this._panelStateHash = stateHash;
 
     let html = `<div class="cycle-indicator">${cycleLabel} - Jour ${this.dayCount} (${pct}%)</div>`;
+
+    // 📊 Compteur d'états : vision d'ensemble instantanée
+    {
+      const stateCounts = {};
+      for (const e of this.entities) {
+        stateCounts[e.state] = (stateCounts[e.state] || 0) + 1;
+      }
+      const stateEmojis = {
+        SOCIAL: '💬', ACTIF: '⚡', REPOS: '😴', ERRANCE: '🌀',
+        FUITE: '💨', SATURE: '😵', PROJET: '🔧', EUPHORIQUE: '✨', CONCENTRE: '🎯'
+      };
+      const parts = Object.entries(stateCounts)
+        .filter(([, n]) => n > 0)
+        .map(([s, n]) => `${stateEmojis[s] || s} ×${n}`)
+        .join(' · ');
+      html += `<div class="state-summary">${parts}</div>`;
+    }
 
     if (this.activeEvent) {
       const evPct = Math.round(this._eventTimer / this.activeEvent.duration * 100);

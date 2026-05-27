@@ -1,73 +1,202 @@
 # HAIZE — Plan du prochain tour
-_Rédigé le : 27/05/2026 08:32 (cron évolution autonome)_
+_Rédigé le : 27/05/2026 08:43 (cron planification autonome)_
 
 ---
 
 ## Bilan du tour précédent
 
-### ✅ Implémenté
+### ✅ Implémenté (tour précédent)
 
-**Fix #1 — CONCENTRE inatteignable (bug critique)**
-- Dans `_updateState`, les branches FUITE→ERRANCE, EUPHORIQUE et CONCENTRE sont maintenant évaluées **avant** la branche `energy < 20 → REPOS`.
-- L'état CONCENTRE (halo bleu, emoji 🎯, vitesse ×0.5) est désormais accessible.
+- **Fix CONCENTRE inatteignable** — branches réordonnées dans `_updateState`, CONCENTRE évalué avant REPOS
+- **Cache halos EUPHORIQUE / CONCENTRE** — `e._eupGrad` / `e._concGrad` invalidés sur position ou haloR delta
+- **Durée max EUPHORIQUE** — cap 15–25s aléatoire par entité, sortie forcée vers ERRANCE
+- **Pools pensées EUPHORIQUE / CONCENTRE** — émissions visuelles correctes pour les deux états
 
-**Fix #2 — Cache halos EUPHORIQUE / CONCENTRE**
-- Halo doré EUPHORIQUE : `e._eupGrad` invalidé si position bougée > 5px ou haloR delta > 3px. `createRadialGradient` n'est plus appelé chaque frame.
-- Halo bleu CONCENTRE : `e._concGrad` invalidé si position bougée > 5px.
-- Gain estimé : ~0.8–1.2ms/frame avec plusieurs entités dans ces états.
+### ⏭ Reporté (prévu mais non implémenté)
 
-**Fix #3 — Durée max EUPHORIQUE (15–25s aléatoire par entité)**
-- `e._euphoriqueCap` initialisé à la transition → EUPHORIQUE.
-- `e._euphoriqueDuration` incrémenté chaque frame.
-- Sortie forcée vers ERRANCE après dépassement du cap.
-- Évite les halos dorés permanents qui saturent visuellement.
-
-**Fix #4 — Pools de pensées EUPHORIQUE / CONCENTRE**
-- `[STATE.EUPHORIQUE]: ['🌟', '😄', '🎉', '🤩', '💃']`
-- `[STATE.CONCENTRE]: ['🎯', '🧘', '💭', '✍️', '🔍']`
-- Ces états émettent maintenant des pensées visuelles.
-
-### ⏭ Laissé de côté
-
-**Liens d'amitié longue distance (score > 40)**
-- Impact cosmétique mineur, déprioritisé.
-- Fix simple : dans `_activeFriendLinks`, ajouter une exception `score >= 40` avant le filtre `distSq > 700*700`.
+1. **Liens d'amitié longue distance (score ≥ 40)** — pas dans le code actuel
+2. **Durée min CONCENTRE** — pas de plancher avant sortie d'état
+3. **CONCENTRE : isolation sociale** — les entités CONCENTRE participent encore aux interactions normales
+4. **Nettoyage cache halo à exit** — `e._eupGrad` / `e._concGrad` pas nullifiés à la sortie d'état
 
 ---
 
-## État actuel
+## Analyse de l'état actuel
 
-- **Bugs critiques restants** : aucun connu
-- **Perf estimée** : update ~2ms, render ~4ms (amélioration halos ~1ms gagnée)
-- **60 FPS** : tenu
+### Ce qui fonctionne bien
+
+- Architecture globale solide, boucle propre, perf tenue
+- 9 états distincts avec transitions visuelles (emojis flottants, halos)
+- Mémoire des lieux heureux / zones évitées — beau système comportemental
+- Territorialité + dérive du home — subtil et efficace
+- Cache heatmap (LUT + offscreen) — très performant
+- Panneau inspect complet avec sparkline humeur
+- Console événements filtrée par catégorie — lisible
+- Saturation sociale introvertie — bien calibrée
+
+### Ce qui pose problème
+
+1. **Liens amitié longue distance** : le filtre `distSq > 700 * 700` s'applique même quand `score ≥ 40`. Les cœurs 💛 ne s'affichent donc **jamais** pour des amis éloignés — bug visuel confirmé.
+
+2. **CONCENTRE trop fugace** : dès que l'entité passe en CONCENTRE (energy < 20), si elle est presque immobile (`speed < 0.3`), la regen d'énergie (`+0.04 * dt`) est active. Avec `minTime = 800ms` et `dt ≈ 16ms`, l'énergie peut dépasser 20 dès la prochaine évaluation d'état (~800–1600ms de jeu). L'état est donc souvent invisible.
+
+3. **CONCENTRE non isolé socialement** : les entités CONCENTRE subissent les mêmes attractions sociales, contagion d'humeur, et accumulation de charge sociale que les autres. La description de l'état (« moins social ») n'est pas reflétée dans le comportement physique.
+
+4. **Cache halos non nettoyés** : `e._eupGrad` / `e._concGrad` restent en mémoire après sortie d'état. Risk : réutilisation du gradient d'une ancienne position si l'entité ré-entre dans l'état rapidement à un endroit différent → 1 frame avec le mauvais gradient. Mineur mais sale.
+
+5. **Dette technique mineure** : dans `_renderThoughtBubbles`, la position de la pensée est mise à jour (side-effect) depuis la méthode de rendu (`t.x = entity.x; t.y = entity.y;`). Les effets de bord dans un render sont une mauvaise pratique — devrait être déplacé dans `_update`.
 
 ---
 
-## Priorités suggérées pour le prochain tour
+## Bugs / régressions détectés
 
-### 1. 🟢 Liens d'amitié longue distance
-Fix simple, impact cosmétique positif. Ajouter dans `_activeFriendLinks` :
+| # | Fichier | Ligne approx. | Description |
+|---|---------|--------------|-------------|
+| B1 | `simulation.js` | `_activeFriendLinks` rebuild (~ligne 695) | Filtre `distSq > 700*700` sans exception pour score ≥ 40 → cœurs 💛 jamais visibles longue distance |
+| B2 | `simulation.js` | `_updateState` + énergie regen | CONCENTRE éjecté en < 2s si entité quasi-immobile |
+| B3 | `simulation.js` | `_renderThoughtBubbles` | Side-effect positional dans le render (mettre à jour `t.x`/`t.y` depuis `_render`) |
+| D1 | `simulation.js` | `_renderEntity` | `e._eupGrad`, `e._concGrad` jamais nullifiés à la sortie d'état |
+
+---
+
+## Perf
+
+- **update** : ~2ms (stable, aucune régression)
+- **render** : ~4ms (stable)
+- **60 FPS** : maintenu
+- Pas de bottleneck nouveau identifié — l'adaptive trail et les caches de gradients font leur travail.
+
+---
+
+## Priorités recommandées pour le prochain tour
+
+### 1. 🟢 Fix liens d'amitié longue distance [TRIVIAL — 2 min]
+
+**Pourquoi** : bug visuel confirmé. Les amis avec score ≥ 40 méritent un lien visible même éloignés. Le cœur 💛 au milieu est une belle feature qui ne fonctionne jamais.
+
+**Comment** :
+
 ```js
-if (distSq > 700 * 700 && score < 40) continue; // laisser passer les amis proches
+// simulation.js — dans le rebuild _activeFriendLinks
+// Ligne actuelle :
+if (distSq < interactRadSqFL || distSq > 700 * 700) continue;
+
+// Remplacer par :
+const isFarFriends = score >= 40 && distSq <= 1200 * 1200;
+if (distSq < interactRadSqFL) continue;
+if (distSq > 700 * 700 && !isFarFriends) continue;
 ```
 
-### 2. 🟡 Améliorer les transitions vers CONCENTRE
-Actuellement CONCENTRE ne dure pas longtemps car `energy < 20` est vite récupérée. Envisager un minimum de durée (ex. 3s) avant de sortir de CONCENTRE, ou un recover d'énergie ralenti dans cet état.
+---
 
-### 3. 🟡 Comportement CONCENTRE plus visible
-Quand une entité est en CONCENTRE :
-- Elle ne répond pas aux interactions sociales (ignorer les voisins)
-- Sa vitesse est déjà réduite (×0.5) — bien
-- Éventuellement : pousser une bulle de pensée plus fréquente
+### 2. 🟡 CONCENTRE : isolation sociale + durée plancher [IMPACT ÉLEVÉ — 20 min]
 
-### 4. 🟢 Nettoyage du cache halo à l'exit
-Nullifier `e._eupGrad` / `e._concGrad` quand l'entité quitte l'état EUPHORIQUE/CONCENTRE (évite de garder une ref morte).
+**Pourquoi** : L'état CONCENTRE est conceptuellement fort (entité épuisée mais encore lucide, focalisée) mais quasiment invisible et comportementalement identique à ERRANCE. Ces deux changements le rendent palpable.
+
+**2a — Durée plancher de 4s** :
+
+Dans `_updateState`, avant toute sortie de CONCENTRE :
+
+```js
+// Après la détection d'entrée en CONCENTRE, initialiser un timer
+if (newState === STATE.CONCENTRE) {
+  e._concentreDuration = 0;
+  e._concentreMinDuration = 4000 + Math.random() * 3000; // 4–7s
+}
+
+// En tête de _updateState, bloquer la sortie si durée min non atteinte
+if (e.state === STATE.CONCENTRE) {
+  e._concentreDuration = (e._concentreDuration || 0) + dt;
+  if (e._concentreDuration < (e._concentreMinDuration || 4000)) return; // pas encore
+}
+```
+
+**2b — Isolation sociale partielle** :
+
+Dans la boucle d'interactions (section `affinity / socialForce`), réduire fortement l'attraction vers les autres si CONCENTRE :
+
+```js
+// Après le calcul de force :
+const concentrePenalty = e.state === STATE.CONCENTRE ? -0.8 : 0;
+const force = (attractBase + affinity * 0.5 + saturationPenalty + concentrePenalty) * t * 0.015;
+```
+
+Et réduire la contagion d'humeur pour les entités CONCENTRE :
+
+```js
+// Ligne ~"moodDelta = other.mood * 0.0003 * dt" :
+const moodReceptivity = e.state === STATE.CONCENTRE ? 0.1 : 1.0;
+const moodDelta = other.mood * 0.0003 * dt * moodReceptivity;
+```
+
+---
+
+### 3. 🟢 Nettoyage des caches halos à l'exit [PROPRETÉ — 5 min]
+
+**Pourquoi** : éviter les refs mortes et potentiels artefacts visuels d'une frame.
+
+Dans `_updateState`, au moment où `newState !== e.state` (transition détectée) :
+
+```js
+// Nettoyer les caches halos de l'état qu'on quitte
+if (e.state === STATE.EUPHORIQUE) {
+  e._eupGrad = null; e._eupGradX = null; e._eupGradY = null; e._eupGradR = null;
+}
+if (e.state === STATE.CONCENTRE) {
+  e._concGrad = null; e._concGradX = null; e._concGradY = null;
+}
+```
+
+---
+
+### 4. 🔵 Refactor side-effect render → update [PROPRETE TECHNIQUE — 10 min]
+
+Déplacer le tracking de position des `_thoughtBubbles` du `_renderThoughtBubbles` vers `_update` (section "mise à jour emojis flottants" ou pensées ambiantes). Principe : le render ne modifie jamais les données.
+
+```js
+// Dans _update, section pensées ambiantes :
+for (const t of this._thoughtBubbles) {
+  const progress = (performance.now() - t.born) / t.life;
+  if (progress < 0.5) {
+    const entity = this.entities.find(e => e.id === t.entityId);
+    if (entity) { t.x = entity.x; t.y = entity.y; }
+  }
+}
+// Dans _renderThoughtBubbles : supprimer le bloc de mise à jour positionnelle
+```
 
 ---
 
 ## Contraintes à respecter
-- `SAVE_KEY = 'haize_save_v1'` → **ne pas changer**
+
+- `SAVE_KEY = 'haize_save_v1'` → **ne pas changer** (snapshots existants)
 - `AFFINITES`, `ENTITY_DEFS` → **inchangés**
 - Cap floating emojis à 15 → maintenir
 - Throttle panel DOM à 200ms → maintenir
-- Ne pas toucher Heatmap (stable)
+- Heatmap (stable, performante) → **ne pas toucher**
+- `minTime = 800` dans `_updateState` → ne pas supprimer, mais CONCENTRE a son propre plancher en plus
+
+## Code à écrire (extrait principal — priorité 1)
+
+```js
+// simulation.js — rebuild _activeFriendLinks — environ ligne 695
+this._activeFriendLinks = [];
+const interactRadSqFL = this.INTERACTION_RADIUS * this.INTERACTION_RADIUS;
+for (let i = 0; i < entities.length; i++) {
+  for (let j = i + 1; j < entities.length; j++) {
+    const a = entities[i], b = entities[j];
+    const scoreA = a.interactionLog[b.id] || 0;
+    const scoreB = b.interactionLog[a.id] || 0;
+    const score  = (scoreA + scoreB) / 2;
+    if (score < this.FRIENDSHIP_THRESHOLD) continue;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const distSq = dx * dx + dy * dy;
+    if (distSq < interactRadSqFL) continue;
+    // Exception : amis proches (score ≥ 40) restent liés jusqu'à 1200px
+    const maxDist = score >= 40 ? 1200 * 1200 : 700 * 700;
+    if (distSq > maxDist) continue;
+    const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
+    this._activeFriendLinks.push({ a, b, score, strength });
+  }
+}
+```

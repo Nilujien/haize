@@ -855,7 +855,9 @@ export class Simulation {
 
           // Les saturés repoussent les autres (réduction de l'attraction)
           const saturationPenalty = e.state === STATE.SATURE ? -0.5 : 0;
-          const force = (attractBase + affinity * 0.5 + saturationPenalty) * t * 0.015;
+          // CONCENTRE : isolation sociale partielle (moins d'attraction vers autrui)
+          const concentrePenalty = e.state === STATE.CONCENTRE ? -0.8 : 0;
+          const force = (attractBase + affinity * 0.5 + saturationPenalty + concentrePenalty) * t * 0.015;
 
           e.vx += nx2 * force;
           e.vy += ny2 * force;
@@ -872,7 +874,9 @@ export class Simulation {
           }
 
           if (dist < this.INTERACTION_RADIUS * 0.5) {
-            const moodDelta = other.mood * 0.0003 * dt;
+            // CONCENTRE : réceptivité réduite à la contagion d'humeur
+            const moodReceptivity = e.state === STATE.CONCENTRE ? 0.1 : 1.0;
+            const moodDelta = other.mood * 0.0003 * dt * moodReceptivity;
             e.mood = Math.max(-1, Math.min(1, e.mood + moodDelta));
             if (e.character.socialite > 0.6 && e.state !== STATE.SATURE) {
               e.energy = Math.min(100, e.energy + 0.003 * dt);
@@ -1020,7 +1024,10 @@ export class Simulation {
           if (score < this.FRIENDSHIP_THRESHOLD) continue;
           const dx = b.x - a.x, dy = b.y - a.y;
           const distSq = dx * dx + dy * dy;
-          if (distSq < interactRadSqFL || distSq > 700 * 700) continue;
+          if (distSq < interactRadSqFL) continue;
+          // Exception : amis solides (score ≥ 40) restent liés jusqu'à 1200px
+          const maxDistSq = score >= 40 ? 1200 * 1200 : 700 * 700;
+          if (distSq > maxDistSq) continue;
           const strength = Math.min(1, (score - this.FRIENDSHIP_THRESHOLD) / 30);
           this._activeFriendLinks.push({ a, b, score, strength });
         }
@@ -1062,9 +1069,16 @@ export class Simulation {
         }
       }
     }
-    // Nettoyer pensées expirées
+    // Nettoyer pensées expirées + suivre position entité (pendant première moitié de vie)
     const nowT = performance.now();
     this._thoughtBubbles = this._thoughtBubbles.filter(t => (nowT - t.born) < t.life);
+    for (const t of this._thoughtBubbles) {
+      const progress = (nowT - t.born) / t.life;
+      if (progress < 0.5) {
+        const entity = this.entities.find(e => e.id === t.entityId);
+        if (entity) { t.x = entity.x; t.y = entity.y; }
+      }
+    }
 
     // ── Mise à jour emojis flottants ──────────────────────────────────────
     const now2 = performance.now();
@@ -1177,6 +1191,12 @@ export class Simulation {
       }
     }
 
+    // Plancher CONCENTRE (4–7s) : empêcher la sortie immédiate par regen d'énergie
+    if (e.state === STATE.CONCENTRE) {
+      e._concentreDuration = (e._concentreDuration || 0) + dt;
+      if (e._concentreDuration < (e._concentreMinDuration || 4000)) return;
+    }
+
     if (e._stateTimer < minTime) return;
 
     let newState = e.state;
@@ -1242,6 +1262,20 @@ export class Simulation {
       if (newState === STATE.EUPHORIQUE) {
         e._euphoriqueDuration = 0;
         e._euphoriqueCap = 15000 + Math.random() * 10000;
+      }
+
+      // Initialiser durée plancher CONCENTRE (4–7s)
+      if (newState === STATE.CONCENTRE) {
+        e._concentreDuration = 0;
+        e._concentreMinDuration = 4000 + Math.random() * 3000;
+      }
+
+      // Nettoyer caches halos de l'état quitté
+      if (e.state === STATE.EUPHORIQUE || prevState === STATE.EUPHORIQUE) {
+        e._eupGrad = null; e._eupGradX = null; e._eupGradY = null; e._eupGradR = null;
+      }
+      if (e.state === STATE.CONCENTRE || prevState === STATE.CONCENTRE) {
+        e._concGrad = null; e._concGradX = null; e._concGradY = null;
       }
 
       // Émettre un emoji flottant sur changement d'état significatif
@@ -1891,10 +1925,11 @@ export class Simulation {
       const rise = progress * 28;
 
       // Suivre l'entité en mouvement pendant la première moitié de vie, puis dériver
+      // (mise à jour positionnelle déplacée dans _update — render read-only)
       let bx = t.x, by;
       if (progress < 0.5) {
         const entity = this.entities.find(e => e.id === t.entityId);
-        if (entity) { bx = entity.x; t.x = entity.x; t.y = entity.y; }
+        if (entity) { bx = entity.x; }
       }
       by = t.y - (t.radius || 22) - 18 - rise;
 

@@ -560,6 +560,7 @@ export class Simulation {
         successCounts: Object.fromEntries(
           this.entities.map(e => [e.id, e.successCount])
         ),
+        conflictCount: { ...this._conflictCount },  // B1 : persister les rancunes
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
       this._showNotification('💾 Sauvegarde OK', '#2ecc71');
@@ -595,6 +596,9 @@ export class Simulation {
       // Cycle
       if (snap.isNight !== undefined) this.isNight = snap.isNight;
       this.cycleStart = performance.now() - (snap.cycleElapsed ?? 0);
+
+      // B1 : restaurer les rancunes
+      if (snap.conflictCount) this._conflictCount = { ...snap.conflictCount };
 
       const d = new Date(snap.savedAt);
       const label = `${d.getHours()}h${String(d.getMinutes()).padStart(2,'0')}`;
@@ -870,13 +874,16 @@ export class Simulation {
       // 🎯 Recrutement PROJET : attraction implicite des entités affinitaires
       for (const recruiter of entities) {
         if (recruiter.state !== STATE.PROJET) continue;
-        // Fix P3 : cibler le projet le plus proche de la recruteuse, pas le premier trouvé
-        const proj = this.projects
-          .filter(p => !p.resolved && !p.isExpired && Math.hypot(p.x - recruiter.x, p.y - recruiter.y) < p.radius)
-          .reduce((closest, p) => {
+        // B3 fix : éviter la mutation d'objet Project dans le reduce
+        const proj = (() => {
+          let closest = null, closestDist = Infinity;
+          for (const p of this.projects) {
+            if (p.resolved || p.isExpired) continue;
             const d = Math.hypot(p.x - recruiter.x, p.y - recruiter.y);
-            return (!closest || d < closest._rdist) ? (p._rdist = d, p) : closest;
-          }, null);
+            if (d < p.radius && d < closestDist) { closest = p; closestDist = d; }
+          }
+          return closest;
+        })();
         if (!proj) continue;
         let recruitCount = 0;
         const nowR = performance.now();
@@ -1128,6 +1135,13 @@ export class Simulation {
       e.social += (Math.random() - 0.5) * 0.02 * dt;
       e.social  = Math.max(0, Math.min(100, e.social));
 
+      // P3 : timer de charge sociale prolongée (pour introvertis → CONCENTRE contextuel)
+      if (e.socialCharge > e.socialSaturationThreshold * 0.7) {
+        e._socialLoadTimer = (e._socialLoadTimer || 0) + dt;
+      } else {
+        e._socialLoadTimer = Math.max(0, (e._socialLoadTimer || 0) - dt * 2);
+      }
+
       // État
       this._updateState(e, dt);
 
@@ -1366,6 +1380,14 @@ export class Simulation {
                e.state !== STATE.SATURE && e.state !== STATE.PROJET) {
       // Euphorie : mood haute + énergie pleine
       newState = STATE.EUPHORIQUE;
+    } else if (
+      // P3 : Retraite volontaire des introvertis socialement surchargés
+      e.character.extraversion < 0.3 &&
+      e.socialCharge > threshold * 0.85 &&
+      (e._socialLoadTimer || 0) > 25000 &&
+      e.state !== STATE.SATURE && e.state !== STATE.PROJET
+    ) {
+      newState = STATE.CONCENTRE;
     } else if (e.energy < 20 && e.mood > -0.3 && e.state !== STATE.SATURE) {
       // Concentration : épuisé mais pas déprimé (FIX: avant REPOS pour être atteignable)
       newState = STATE.CONCENTRE;
@@ -1677,6 +1699,12 @@ export class Simulation {
 
     // ── Pré-calculer la hauteur totale ──────────────────────────────────────
     const contacts = e.getTopContacts(3);
+
+    // P1 : expérience projet — pré-calculer avant PH (réutilisé dans rendu)
+    const expEntries = Object.entries(e._projectHistory || {})
+      .filter(([, count]) => count >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
     const hasSparkline = e.moodHistory.length > 4;
     const hasZones = e.happyZones.length > 0 || (e.avoidZones?.length > 0);
     const SPARKLINE_H = 38; // label(10) + gap(4) + graphe(24)
@@ -1693,6 +1721,7 @@ export class Simulation {
       + SECTION_GAP
       + LINE_H * 2                            // 2 lignes de traits (2 cols × 2 lignes)
       + SEP_H * 2                             // séparateur
+      + (expEntries.length > 0 ? 11 + SECTION_GAP + expEntries.length * LINE_H + SEP_H * 2 : 0) // P1 : expérience
       + 11                                    // titre CONTACTS
       + SECTION_GAP
       + Math.max(1, contacts.length) * LINE_H // lignes contacts (min 1 pour "aucun")
@@ -1808,6 +1837,24 @@ export class Simulation {
       this._drawBar(ctx, bx2 + TLBL, cy + 1, colW - TLBL, BAR_H, vB, e.color + 'bb');
 
       cy += LINE_H;
+    }
+
+    // ── Expérience projet ───────────────────────────────────────────────────
+    if (expEntries.length > 0) {
+      drawSep();
+      ctx.font      = 'bold 9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillText('EXPÉRIENCE', X, cy);
+      cy += 11 + SECTION_GAP;
+
+      for (const [type, count] of expEntries) {
+        const isVet = count >= 5;
+        ctx.font      = '9px monospace';
+        ctx.fillStyle = isVet ? '#ffd700' : 'rgba(255,200,100,0.65)';
+        const stars = isVet ? '⭐⭐' : '⭐';
+        ctx.fillText(`${stars} ${type} ×${count}`, X, cy + 1);
+        cy += LINE_H;
+      }
     }
 
     // ── Contacts fréquents ──────────────────────────────────────────────────
@@ -2568,7 +2615,7 @@ export class Simulation {
 
     // 🚀 Optimisation DOM : ne rebuilder que si l'état a changé (évite ~1200 node créations/200ms)
     const stateHash = this.entities.map(e =>
-      `${e.id}:${e.state}:${Math.round(e.mood * 10)}:${Math.round(e.energy)}:${e === this.selectedEntity ? 1 : 0}`
+      `${e.id}:${e.state}:${Math.round(e.mood * 10)}:${Math.round(e.energy)}`
     ).join('|') + `|${this.dayCount}|${pct}|${this.activeEvent ? this.activeEvent.label : ''}`;
     if (stateHash === this._panelStateHash) return;
     this._panelStateHash = stateHash;

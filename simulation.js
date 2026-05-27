@@ -450,6 +450,14 @@ export class Simulation {
       r: 0.5 + Math.random() * 1.2,
       a: 0.3 + Math.random() * 0.5
     }));
+
+    // 🎯 Recrutement PROJET : timers throttle par paire entité-recruté
+    this._recruitTimers = {};
+
+    // ❄️ Mémoire de rancune : compteur de conflits par paire
+    this._conflictCount = {};
+    // 🚀 Cache hash panel info (évite DOM rebuild inutile)
+    this._panelStateHash = null;
   }
 
   resize() {
@@ -489,6 +497,9 @@ export class Simulation {
     this._forgetTimer        = 0;
     this._activeFriendLinks  = [];
     this._concentrePerturbTimers = new Map();
+    this._recruitTimers      = {};
+    this._conflictCount      = {};
+    this._panelStateHash     = null;
   }
 
   // ── Clic sur le canvas ─────────────────────────────────────────────────────
@@ -848,6 +859,37 @@ export class Simulation {
         }
       }
 
+      // 🎯 Recrutement PROJET : attraction implicite des entités affinitaires
+      for (const recruiter of entities) {
+        if (recruiter.state !== STATE.PROJET) continue;
+        const proj = this.projects.find(p =>
+          !p.resolved && !p.isExpired && Math.hypot(p.x - recruiter.x, p.y - recruiter.y) < p.radius
+        );
+        if (!proj) continue;
+        let recruitCount = 0;
+        const nowR = performance.now();
+        for (const other of entities) {
+          if (other === recruiter) continue;
+          if (other.state === STATE.SATURE || other.state === STATE.FUITE || other.state === STATE.PROJET) continue;
+          if (recruitCount >= 4) break;
+          const aff = recruiter.getAffinityWith(other.id);
+          if (aff < 0.5) continue;
+          const rdx = proj.x - other.x, rdy = proj.y - other.y;
+          const rdist = Math.hypot(rdx, rdy) || 1;
+          if (rdist > proj.radius * 4) continue;
+          const pull = aff * 0.018 * (1 - rdist / (proj.radius * 4));
+          other.vx += (rdx / rdist) * pull;
+          other.vy += (rdy / rdist) * pull;
+          recruitCount++;
+          // Signal 📡 throttlé 5s par paire recruiter-other
+          const rKey = `recruit-${recruiter.id}-${other.id}`;
+          if (!this._recruitTimers[rKey] || nowR - this._recruitTimers[rKey] > 5000) {
+            this._recruitTimers[rKey] = nowR;
+            this._spawnFloatingEmoji((recruiter.x + other.x) / 2, (recruiter.y + other.y) / 2 - 10, '📡');
+          }
+        }
+      }
+
       // Interactions avec les autres entités + mémorisation
       const _interactRadSq = this.INTERACTION_RADIUS * this.INTERACTION_RADIUS;
       for (const other of entities) {
@@ -887,6 +929,8 @@ export class Simulation {
             if (!this._lastConflictLog[ck] || now2 - this._lastConflictLog[ck] > 4000) {
               this._lastConflictLog[ck] = now2;
               this.pushEvent(`💢 ${e.id} ↔ ${other.id} conflit`, '#e74c3c', 'conflict');
+              // ❄️ Rancune : incrémenter compteur de conflits répétés
+              this._conflictCount[ck] = (this._conflictCount[ck] || 0) + 1;
             }
           }
         }
@@ -1482,6 +1526,8 @@ export class Simulation {
 
     // ── Liens d'amitié persistants (interactionLog) ────────────────────────
     this._renderFriendshipLinks(ctx);
+    this._renderRecruitLinks(ctx);
+    this._renderRancorLinks(ctx);
 
     // ── Emojis flottants ───────────────────────────────────────────────────
     this._renderFloatingEmojis(ctx);
@@ -1881,6 +1927,70 @@ export class Simulation {
   }
 
   // ── Liens d'amitié persistants ────────────────────────────────────────────
+  // 🎯 Rendu des liens de recrutement PROJET
+  _renderRecruitLinks(ctx) {
+    const entities = this.entities;
+    ctx.save();
+    for (const e of entities) {
+      if (e.state !== STATE.PROJET) continue;
+      for (const other of entities) {
+        if (other === e || other.state === STATE.PROJET) continue;
+        const aff = e.getAffinityWith(other.id);
+        if (aff < 0.5) continue;
+        const dx = other.x - e.x, dy = other.y - e.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 300) continue;
+        const alpha = aff * 0.22 * (1 - dist / 300);
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y);
+        ctx.lineTo(other.x, other.y);
+        ctx.strokeStyle = `rgba(255,215,0,${alpha.toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    ctx.restore();
+  }
+
+  // ❄️ Rendu des liens de rancune (conflits répétés)
+  _renderRancorLinks(ctx) {
+    const entities = this.entities;
+    const now = performance.now();
+    const pulse = 0.4 + Math.sin(now * 0.002) * 0.3;
+    ctx.save();
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < entities.length; i++) {
+      for (let j = i + 1; j < entities.length; j++) {
+        const a = entities[i], b = entities[j];
+        const ck = [a.id, b.id].sort().join('-');
+        const count = this._conflictCount[ck] || 0;
+        if (count < 3) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 350) continue;
+        const intensity = Math.min(1, count / 8);
+        const alpha = intensity * pulse * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = `rgba(180,60,60,${alpha.toFixed(3)})`;
+        ctx.lineWidth = 1 + intensity;
+        ctx.setLineDash([2, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Icône ❄️ entre les deux
+        ctx.globalAlpha = intensity * 0.75;
+        ctx.fillText('❄️', (a.x + b.x) / 2, (a.y + b.y) / 2);
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+  }
+
   _renderFriendshipLinks(ctx) {
     if (this._activeFriendLinks.length === 0) return;
     const now = performance.now();
@@ -2438,6 +2548,13 @@ export class Simulation {
     const pct = Math.round((cycleElapsed / this.dayDuration) * 100);
     const cycleLabel = this.isNight ? '🌙 Nuit' : '☀️ Jour';
 
+    // 🚀 Optimisation DOM : ne rebuilder que si l'état a changé (évite ~1200 node créations/200ms)
+    const stateHash = this.entities.map(e =>
+      `${e.id}:${e.state}:${Math.round(e.mood * 10)}:${Math.round(e.energy)}:${e === this.selectedEntity ? 1 : 0}`
+    ).join('|') + `|${this.dayCount}|${pct}|${this.activeEvent ? this.activeEvent.label : ''}`;
+    if (stateHash === this._panelStateHash) return;
+    this._panelStateHash = stateHash;
+
     let html = `<div class="cycle-indicator">${cycleLabel} - Jour ${this.dayCount} (${pct}%)</div>`;
 
     if (this.activeEvent) {
@@ -2453,7 +2570,8 @@ export class Simulation {
       const energyPct = Math.round(e.energy);
       const isSelected = (e === this.selectedEntity);
       const isSaturated = (e.state === STATE.SATURE);
-      const moodTrend = (() => {        const hist = e.moodHistory;
+      const moodTrend = (() => {
+        const hist = e.moodHistory;
         if (hist.length < 3) return '';
         const delta = hist[hist.length - 1] - hist[hist.length - 3];
         return delta > 0.05 ? String.fromCodePoint(0x2191) : delta < -0.05 ? String.fromCodePoint(0x2193) : String.fromCodePoint(0x2192);
@@ -2466,15 +2584,13 @@ export class Simulation {
           <span class="entity-stat">⚡${energyPct}</span>
           <span class="entity-stat ${moodClass}">${moodBar}%${moodTrend}</span>
           ${e.successCount > 0 ? `<span class="entity-stat" style="color:#f9ca24">★${e.successCount}</span>` : ''}
-          ${isSaturated ? `<span class="entity-stat" style="color:#ff7675">😵</span>` : ''}
+          ${isSaturated ? `<span class="entity-stat" style="color:#ff7675">💤</span>` : ''}
         </div>`;
     }
 
     html += `</div>`;
-    html += `<div style="margin-top:8px;font-size:9px;color:#555;text-align:center">Clic sur entité pour inspecter · H = heatmap</div>`;
+    html += `<div style="margin-top:8px;font-size:9px;color:#555;text-align:center">Clic sur entité pour inspecter • H = heatmap</div>`;
 
     this.infoPanel.innerHTML = html;
   }
 }
-
-

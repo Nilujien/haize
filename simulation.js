@@ -61,7 +61,7 @@ const GLOBAL_EVENTS = [
     label: '🌪️ Tempête',
     color: '#636e72',
     duration: 12000,
-    description: 'Chaos général — forces aléatoires violentes',
+    description: 'Chaos général - forces aléatoires violentes',
     apply(entities, dt) {
       for (const e of entities) {
         e.vx += (Math.random() - 0.5) * 0.8;
@@ -76,7 +76,7 @@ const GLOBAL_EVENTS = [
     label: '🎊 Grande Fête',
     color: '#fdcb6e',
     duration: 15000,
-    description: 'Euphorie collective — tout le monde converge au centre',
+    description: 'Euphorie collective - tout le monde converge au centre',
     apply(entities, dt, W, H) {
       const cx = W / 2, cy = H / 2;
       for (const e of entities) {
@@ -95,7 +95,7 @@ const GLOBAL_EVENTS = [
     label: '⚡ Vague de Tension',
     color: '#d63031',
     duration: 10000,
-    description: 'Agressivité amplifiée — les conflits s\'embrasent',
+    description: 'Agressivité amplifiée - les conflits s\'embrasent',
     apply(entities, dt) {
       for (const e of entities) {
         if (e.character.agression > 0.4) {
@@ -111,7 +111,7 @@ const GLOBAL_EVENTS = [
     label: '😶 Vague Dépressive',
     color: '#74b9ff',
     duration: 14000,
-    description: 'Apathie générale — tout le monde ralentit et se retire',
+    description: 'Apathie générale - tout le monde ralentit et se retire',
     apply(entities, dt) {
       for (const e of entities) {
         e.vx *= 0.97;
@@ -126,7 +126,7 @@ const GLOBAL_EVENTS = [
     label: '🦠 Épidémie d\'Humeur',
     color: '#55efc4',
     duration: 20000,
-    description: 'Patient zéro — la déprime se propage par contact entre entités',
+    description: 'Patient zéro - la déprime se propage par contact entre entités',
     _initialized: false,
     _patientZero: null,
     apply(entities, dt) {
@@ -446,6 +446,11 @@ export class Simulation {
     this._lastFuiteLog    = {};
     this._lastSatLog      = {};
     this._lastMoodLog     = {};
+    // Fix : timers orphelins réinitialisés au reset
+    this._friendLinkTimer    = 0;
+    this._heatmapRecordTimer = 0;
+    this._forgetTimer        = 0;
+    this._activeFriendLinks  = [];
   }
 
   // ── Clic sur le canvas ─────────────────────────────────────────────────────
@@ -599,7 +604,7 @@ export class Simulation {
           this._updatePanel();
         }
 
-        // Console dirty — notifier index.html toutes les 100ms si changement
+        // Console dirty - notifier index.html toutes les 100ms si changement
         this._consoleTimer = (this._consoleTimer || 0) + rawDt;
         if (this._consoleTimer >= 100 && this._consoleDirty) {
           this._consoleTimer = 0;
@@ -625,10 +630,10 @@ export class Simulation {
     // Log transition jour ↔ nuit
     if (wasNight !== this.isNight) {
       if (this.isNight) {
-        this.pushEvent('🌙 La nuit tombe — les entités ralentissent', '#6c88c4', 'cycle');
+        this.pushEvent('🌙 La nuit tombe - les entités ralentissent', '#6c88c4', 'cycle');
       } else {
         this.dayCount++;
-        this.pushEvent(`☀️ Jour ${this.dayCount} — simulation active`, '#f9ca24', 'cycle');
+        this.pushEvent(`☀️ Jour ${this.dayCount} - simulation active`, '#f9ca24', 'cycle');
       }
     }
   }
@@ -677,7 +682,7 @@ export class Simulation {
     this._updateProjects(dt);
     this.heatmap.decay(dt);
 
-    // Réinitialiser compteurs voisins (passe O(n²) avec distSq — pas de sqrt)
+    // Réinitialiser compteurs voisins (passe O(n2) avec distSq - pas de sqrt)
     this._neighborCount = {};
     for (let k = 0; k < entities.length; k++) this._neighborCount[entities[k].id] = 0;
     const neighborThreshSq = (this.INTERACTION_RADIUS * 0.6) * (this.INTERACTION_RADIUS * 0.6);
@@ -1009,7 +1014,7 @@ export class Simulation {
 
     }
 
-    // ── Rebuild cache liens d'amitié (5×/s, évite O(n²)×O(affinités) à chaque frame) ──
+    // ── Rebuild cache liens d'amitié (5×/s, évite O(n2)×O(affinités) à chaque frame) ──
     this._friendLinkTimer += dt;
     if (this._friendLinkTimer >= 200) {
       this._friendLinkTimer = 0;
@@ -1164,7 +1169,7 @@ export class Simulation {
         }
 
         // Un seul log via pushEvent (fix double-log)
-        this.pushEvent(`🌟 Projet "${proj.label}" résolu par ${participantIds || '—'}`, proj.color, 'project');
+        this.pushEvent(`🌟 Projet "${proj.label}" résolu par ${participantIds || '-'}`, proj.color, 'project');
       }
     }
 
@@ -1180,7 +1185,7 @@ export class Simulation {
     e._stateTimer += dt;
     const minTime = 800;
 
-    // Cap durée EUPHORIQUE (15–25s) pour éviter états permanents
+    // Cap durée EUPHORIQUE (15-25s) pour éviter états permanents
     if (e.state === STATE.EUPHORIQUE) {
       e._euphoriqueDuration = (e._euphoriqueDuration || 0) + dt;
       if (e._euphoriqueDuration > (e._euphoriqueCap || 20000)) {
@@ -1191,7 +1196,7 @@ export class Simulation {
       }
     }
 
-    // Plancher CONCENTRE (4–7s) : empêcher la sortie immédiate par regen d'énergie
+    // Plancher CONCENTRE (4-7s) : empêcher la sortie immédiate par regen d'énergie
     if (e.state === STATE.CONCENTRE) {
       e._concentreDuration = (e._concentreDuration || 0) + dt;
       if (e._concentreDuration < (e._concentreMinDuration || 4000)) return;
@@ -1258,13 +1263,13 @@ export class Simulation {
       e.state = newState;
       e._stateTimer = 0;
 
-      // Initialiser cap durée EUPHORIQUE (15–25s aléatoire par entité)
+      // Initialiser cap durée EUPHORIQUE (15-25s aléatoire par entité)
       if (newState === STATE.EUPHORIQUE) {
         e._euphoriqueDuration = 0;
         e._euphoriqueCap = 15000 + Math.random() * 10000;
       }
 
-      // Initialiser durée plancher CONCENTRE (4–7s)
+      // Initialiser durée plancher CONCENTRE (4-7s)
       if (newState === STATE.CONCENTRE) {
         e._concentreDuration = 0;
         e._concentreMinDuration = 4000 + Math.random() * 3000;
@@ -1521,12 +1526,12 @@ export class Simulation {
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`${ev.label} — ${ev.description}`, W / 2, 21);
+    ctx.fillText(`${ev.label} - ${ev.description}`, W / 2, 21);
 
     ctx.restore();
   }
 
-  // ── Panneau Inspect (click-to-inspect) — position fixe haut-gauche ────────
+  // ── Panneau Inspect (click-to-inspect) - position fixe haut-gauche ────────
   _renderInspectPanel(ctx, W, H) {
     const e = this.selectedEntity;
 
@@ -1692,7 +1697,7 @@ export class Simulation {
     if (contacts.length === 0) {
       ctx.font      = '9px monospace';
       ctx.fillStyle = 'rgba(255,255,255,0.22)';
-      ctx.fillText('Aucun encore…', X, cy + 1);
+      ctx.fillText('Aucun encore...', X, cy + 1);
       cy += LINE_H;
     } else {
       for (const { id, score } of contacts) {
@@ -1822,9 +1827,13 @@ export class Simulation {
     const now = performance.now();
     const pulse = 0.5 + Math.sin(now * 0.0015) * 0.3;
 
-    // Utiliser le cache pré-calculé dans _update (rebuild 5×/s) — plus de O(n²) ici
+    // Utiliser le cache pré-calculé dans _update (rebuild 5×/s) - plus de O(n2) ici
     for (const { a, b, score, strength } of this._activeFriendLinks) {
-      const alpha = strength * pulse * 0.35;
+      // Attenuer les liens lointains (>700px) pour encoder la distance emotionnelle
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const linkDist = Math.sqrt(dx*dx + dy*dy);
+      const distFactor = linkDist > 700 ? 0.45 : 1.0;
+      const alpha = strength * pulse * 0.35 * distFactor;
 
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
@@ -1894,7 +1903,7 @@ export class Simulation {
   // ── Choisir une pensée ambiante selon l'état/humeur de l'entité ──────────
   _pickThought(e) {
     const thoughts = {
-      [STATE.REPOS]:      ['💤', '😴', '🌙', 'zzz…'],
+      [STATE.REPOS]:      ['💤', '😴', '🌙', 'zzz...'],
       [STATE.SOCIAL]:     ['😄', '💬', '🤝', '✨'],
       [STATE.ACTIF]:      ['⚡', '🔥', '💪', '🏃'],
       [STATE.FUITE]:      ['😱', '💨', '👻', '😰'],
@@ -1924,14 +1933,9 @@ export class Simulation {
       const alpha = progress < 0.2 ? progress / 0.2 : Math.max(0, 1 - (progress - 0.2) / 0.8);
       const rise = progress * 28;
 
-      // Suivre l'entité en mouvement pendant la première moitié de vie, puis dériver
-      // (mise à jour positionnelle déplacée dans _update — render read-only)
-      let bx = t.x, by;
-      if (progress < 0.5) {
-        const entity = this.entities.find(e => e.id === t.entityId);
-        if (entity) { bx = entity.x; }
-      }
-      by = t.y - (t.radius || 22) - 18 - rise;
+      // Position mise à jour dans _update (read-only ici)
+      const bx = t.x;
+      const by = t.y - (t.radius || 22) - 18 - rise;
 
       ctx.globalAlpha = alpha * 0.7;
       ctx.fillStyle = 'rgba(20,22,40,0.75)';
@@ -1968,7 +1972,7 @@ export class Simulation {
       ctx.beginPath();
       ctx.arc(e.homeX, e.homeY, effectiveRadius, 0, Math.PI * 2);
 
-      // Gradient : invalider uniquement si home a bougé > 5px (pas sur le pulse — imperceptible)
+      // Gradient : invalider uniquement si home a bougé > 5px (pas sur le pulse - imperceptible)
       const cacheKey = `${Math.round(e.homeX/5)*5}_${Math.round(e.homeY/5)*5}`;
       if (!e._territoryGradCache || e._territoryGradCacheKey !== cacheKey) {
         e._territoryGradCache = ctx.createRadialGradient(
@@ -2011,7 +2015,7 @@ export class Simulation {
           ctx.restore();
         }
       }
-      // Zones à éviter (rouge-brun) — affichées uniquement pour l'entité sélectionnée
+      // Zones à éviter (rouge-brun) - affichées uniquement pour l'entité sélectionnée
       if (e === this.selectedEntity && e.avoidZones?.length > 0) {
         for (const zone of e.avoidZones) {
           const zAlpha = 0.10 + (zone.score / 10) * 0.18;
@@ -2036,7 +2040,7 @@ export class Simulation {
     const isSelected = (e === this.selectedEntity);
     const isSaturated = (e.state === STATE.SATURE);
 
-    // Halo saturation sociale (aura violacée-rouge pour les saturés) — gradient caché
+    // Halo saturation sociale (aura violacée-rouge pour les saturés) - gradient caché
     if (isSaturated) {
       const satPct = Math.min(1, e.socialCharge / 100);
       const satAlpha = satPct * 0.5;
@@ -2060,7 +2064,7 @@ export class Simulation {
       ctx.fill();
     }
 
-    // Halo euphorique (aura dorée pulsante) — gradient caché pour perf
+    // Halo euphorique (aura dorée pulsante) - gradient caché pour perf
     if (e.state === STATE.EUPHORIQUE) {
       const eupPulse = 1 + Math.sin(performance.now() * 0.004 + e._noiseOffsetX) * 0.15;
       const eupHaloR = r * 2.5 * eupPulse;
@@ -2079,7 +2083,7 @@ export class Simulation {
       ctx.fill();
     }
 
-    // Halo concentré (aura bleue douce, statique) — gradient caché pour perf
+    // Halo concentré (aura bleue douce, statique) - gradient caché pour perf
     if (e.state === STATE.CONCENTRE) {
       const concR = r * 1.8;
       ctx.beginPath();
@@ -2120,7 +2124,7 @@ export class Simulation {
       ctx.stroke();
     }
 
-    // Halo humeur — gradient caché (invalidé si signe changé, absMood delta > 0.08, ou dépl > 5px)
+    // Halo humeur - gradient caché (invalidé si signe changé, absMood delta > 0.08, ou dépl > 5px)
     const absMood = Math.abs(e.mood);
     if (absMood > 0.15) {
       const moodSign = e.mood > 0 ? 1 : -1;
@@ -2211,6 +2215,21 @@ export class Simulation {
       ctx.fillText(`★${e.successCount}`, badgeX + 1, badgeY + 1);
       ctx.fillStyle = '#f9ca24';
       ctx.fillText(`★${e.successCount}`, badgeX, badgeY);
+    }
+
+    // Badge persistant CONCENTRE - icone visible au-dessus du cercle
+    if (e.state === STATE.CONCENTRE) {
+      const badgeX = e.x;
+      const badgeY = e.y - r - 24;
+      const pulse = 0.7 + Math.sin(performance.now() * 0.002 + e._noiseOffsetX) * 0.15;
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.font = '13px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🎯', badgeX, badgeY);
+      ctx.globalAlpha = 1;
+      ctx.restore();
     }
   }
 
@@ -2340,7 +2359,7 @@ export class Simulation {
     const pct = Math.round((cycleElapsed / this.dayDuration) * 100);
     const cycleLabel = this.isNight ? '🌙 Nuit' : '☀️ Jour';
 
-    let html = `<div class="cycle-indicator">${cycleLabel} — Jour ${this.dayCount} (${pct}%)</div>`;
+    let html = `<div class="cycle-indicator">${cycleLabel} - Jour ${this.dayCount} (${pct}%)</div>`;
 
     if (this.activeEvent) {
       const evPct = Math.round(this._eventTimer / this.activeEvent.duration * 100);

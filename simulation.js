@@ -580,6 +580,7 @@ export class Simulation {
           this.entities.map(e => [e.id, {
             dur: e._concentreDuration    || 0,
             min: e._concentreMinDuration || 4000,
+            cap: e._concentreCap         || 50000,
           }])
         ),
       };
@@ -631,7 +632,7 @@ export class Simulation {
       if (snap.concentreDurations) {
         for (const e of this.entities) {
           const d = snap.concentreDurations[e.id];
-          if (d) { e._concentreDuration = d.dur; e._concentreMinDuration = d.min; }
+          if (d) { e._concentreDuration = d.dur; e._concentreMinDuration = d.min; e._concentreCap = d.cap ?? 50000; }
         }
       }
 
@@ -2240,13 +2241,79 @@ export class Simulation {
     ctx.restore();
   }
 
+  // ── Journal des Relations ─────────────────────────────────────────────────
+  // Calculé à la demande (toggle J) — aucun coût sur la boucle principale
+  buildRelationJournal() {
+    const facts = [];
+    const entities = this.entities;
+
+    // 1. Meilleure alliance (interactionLog croisé maximal)
+    let bestScore = 0, bestPair = null;
+    for (let i = 0; i < entities.length; i++) {
+      for (let j = i + 1; j < entities.length; j++) {
+        const a = entities[i], b = entities[j];
+        const s = ((a.interactionLog[b.id] || 0) + (b.interactionLog[a.id] || 0)) / 2;
+        if (s > bestScore) { bestScore = s; bestPair = [a, b]; }
+      }
+    }
+    if (bestPair && bestScore > 3) {
+      const [a, b] = bestPair;
+      // Compter projets communs (approximation : les deux sont dans successCount)
+      facts.push(`💛 ${a.id} ↔ ${b.id} : meilleurs alliés (affinité ${bestScore.toFixed(1)})`);
+    }
+
+    // 2. Rancœur la plus profonde
+    let deepKey = null, deepCount = 0;
+    for (const [ck, count] of Object.entries(this._conflictCount)) {
+      if (count > deepCount) { deepCount = count; deepKey = ck; }
+    }
+    if (deepKey && deepCount >= 3) {
+      const label = deepKey.replace('-', ' ↔ ');
+      facts.push(`❄️ ${label} : ennemis jurés (conflits ×${deepCount})`);
+    }
+
+    // 3. Star des projets (plus gros successCount)
+    const star = [...entities].sort((a, b) => (b.successCount || 0) - (a.successCount || 0))[0];
+    if (star && (star.successCount || 0) > 0) {
+      facts.push(`🌟 ${star.id} : ${star.successCount} projet${star.successCount > 1 ? 's' : ''} résolus`);
+    }
+
+    // 4. Expert de type de projet (≥5 du même type)
+    for (const e of entities) {
+      for (const [type, count] of Object.entries(e._projectHistory || {})) {
+        if (count >= 5) facts.push(`⭐ ${e.id} : expert ${type} (×${count})`);
+      }
+    }
+
+    // 5. Réconciliation récente (rancune = 0 mais conflits passés → détectés via absence de ck)
+    // Simple heuristique : paires avec interactionLog élevé ET conflit résolu (absent de _conflictCount)
+    let recoPair = null, recoScore = 0;
+    for (let i = 0; i < entities.length; i++) {
+      for (let j = i + 1; j < entities.length; j++) {
+        const a = entities[i], b = entities[j];
+        const ck1 = `${a.id}-${b.id}`, ck2 = `${b.id}-${a.id}`;
+        const hasConflict = this._conflictCount[ck1] || this._conflictCount[ck2];
+        const score = ((a.interactionLog[b.id] || 0) + (b.interactionLog[a.id] || 0)) / 2;
+        // Paire avec bonne affinité ET aucun conflit actif = probablement réconciliée
+        if (!hasConflict && score > 5 && score > recoScore) {
+          recoScore = score; recoPair = [a, b];
+        }
+      }
+    }
+    if (recoPair && recoPair !== bestPair) {
+      facts.push(`🤝 ${recoPair[0].id} ↔ ${recoPair[1].id} : en harmonie (aucun conflit actif)`);
+    }
+
+    return facts.slice(0, 6);
+  }
+
   _renderFriendshipLinks(ctx) {
     if (this._activeFriendLinks.length === 0) return;
     const now = performance.now();
     const pulse = 0.5 + Math.sin(now * 0.0015) * 0.3;
 
     // Utiliser le cache pré-calculé dans _update (rebuild 5×/s) - plus de O(n2) ici
-    for (const { a, b, score, strength } of this._activeFriendLinks) {
+    for (const { a, b, score, strength, isClose } of this._activeFriendLinks) {
       // Attenuer les liens lointains (>700px) pour encoder la distance emotionnelle
       const dx = b.x - a.x, dy = b.y - a.y;
       const linkDist = Math.sqrt(dx*dx + dy*dy);

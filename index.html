@@ -35,6 +35,15 @@
     <div id="event-console-body"></div>
   </div>
 
+  <!-- Journal des Relations (overlay, toggle J) -->
+  <div id="journal-panel" hidden>
+    <div id="journal-header">
+      <span id="journal-title">📖 JOURNAL DES RELATIONS</span>
+      <button id="journal-close" title="Fermer (J)">✕</button>
+    </div>
+    <div id="journal-body"></div>
+  </div>
+
   <!-- Contrôles -->
   <div id="controls">
     <button class="ctrl-btn" id="btn-pause">⏸ Pause</button>
@@ -46,6 +55,7 @@
     <button class="ctrl-btn ctrl-btn--accent" id="btn-save">💾 Save</button>
     <button class="ctrl-btn" id="btn-load">📂 Load</button>
     <button class="ctrl-btn ctrl-btn--dim" id="btn-heatmap" title="Touche H">🌡️</button>
+    <button class="ctrl-btn ctrl-btn--dim" id="btn-journal" title="Journal des relations (Touche J)">📖</button>
     <span class="ctrl-sep"></span>
     <span class="ctrl-label">Événements</span>
     <button class="ctrl-btn ctrl-btn--event" id="btn-ev-tempete"  title="Déclencher Tempête">🌪️</button>
@@ -193,8 +203,37 @@
       btnHeatmap.style.opacity = sim.showHeatmap ? '1' : '0.5';
     }
     btnHeatmap.addEventListener('click', toggleHeatmap);
+
+    // Journal des relations toggle (bouton + touche J)
+    const journalPanel = document.getElementById('journal-panel');
+    const journalBody  = document.getElementById('journal-body');
+    const btnJournal   = document.getElementById('btn-journal');
+    document.getElementById('journal-close').addEventListener('click', () => closeJournal());
+
+    function closeJournal() {
+      journalPanel.hidden = true;
+      btnJournal.style.opacity = '0.5';
+    }
+    function openJournal() {
+      // Calculer le contenu à la demande (coût nul sur la boucle)
+      const facts = sim.buildRelationJournal();
+      if (facts.length === 0) {
+        journalBody.innerHTML = '<p class="journal-empty">Pas encore assez de relations établies…</p>';
+      } else {
+        journalBody.innerHTML = facts.map(f => `<div class="journal-fact">${f}</div>`).join('');
+      }
+      journalPanel.hidden = false;
+      btnJournal.style.opacity = '1';
+    }
+    function toggleJournal() {
+      if (journalPanel.hidden) openJournal(); else closeJournal();
+    }
+    btnJournal.addEventListener('click', toggleJournal);
+    // Fermer en cliquant hors du panneau
+    journalPanel.addEventListener('click', (e) => { if (e.target === journalPanel) closeJournal(); });
     window.addEventListener('keydown', (e) => {
       if (e.key === 'h' || e.key === 'H') toggleHeatmap();
+      if (e.key === 'j' || e.key === 'J') toggleJournal();
     });
 
     // Déclencheurs d'événements manuels
